@@ -902,6 +902,105 @@
     return {status:'ok', title:'디지털 기반 수업 시수 합계', detail:`"★디지털 기반 수업(N)" 표기 ${count}건의 합(${total}시간)이 "2학기 디지털 기반 수업 시수"(${stated})와 일치합니다.${caveat}`};
   }
 
+  function escapeRegex(s){
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  const TYPO_DICTIONARY = [
+    ['몇일','며칠'],
+    ['됬다','됐다'], ['됬음','됐음'], ['됬고','됐고'], ['됬는데','됐는데'], ['됬습니다','됐습니다'],
+    ['어떻해','어떡해'],
+    ['웬지','왠지'],
+    ['어의없','어이없'],
+    ['오랫만','오랜만'],
+    ['왠만하면','웬만하면'],
+    ['희안하','희한하'],
+    ['않되고','안 되고'], ['않됩니다','안 됩니다'], ['않되는','안 되는'],
+    ['들어난','드러난'],
+    ['않맞','안 맞'],
+    ['일일히','일일이'],
+    ['틀리지 않','다르지 않'],
+  ];
+
+  const PARTICLE_TERMS = [
+    {term:'정기시험', wrong:'를', correct:'을'},
+    {term:'성취기준', wrong:'를', correct:'을'},
+    {term:'평가기준', wrong:'를', correct:'을'},
+    {term:'교육과정', wrong:'를', correct:'을'},
+    {term:'계획서', wrong:'을', correct:'를'},
+    {term:'지필평가', wrong:'을', correct:'를'},
+    {term:'수행평가', wrong:'을', correct:'를'},
+  ];
+
+  function ruleTypos(ctx){
+    const items = [];
+    const text = ctx.fullText;
+
+    // 1) curated typo dictionary
+    const dictHits = [];
+    for(const [wrong, correct] of TYPO_DICTIONARY){
+      if(text.includes(wrong)) dictHits.push(`${wrong} → ${correct}`);
+    }
+    if(dictHits.length){
+      items.push({
+        status:'issue', title:'흔한 맞춤법 오류로 보이는 표현',
+        detail: dictHits.map(h=>`<span class="mono">${escapeHtml(h)}</span>`).join('<br>')
+      });
+    }
+
+    // 2) domain 조사(을/를) 오류 — term + wrong particle, not followed by another Hangul syllable
+    const particleHits = [];
+    for(const {term, wrong, correct} of PARTICLE_TERMS){
+      const re = new RegExp(escapeRegex(term + wrong), 'g');
+      let m, count = 0;
+      while((m = re.exec(text))){
+        const nextChar = text[m.index + m[0].length] || '';
+        if(!/[가-힣]/.test(nextChar)) count++;
+      }
+      if(count > 0) particleHits.push(`${term}${wrong} → ${term}${correct} (${count}건)`);
+    }
+    if(particleHits.length){
+      items.push({
+        status:'issue', title:"조사(을/를) 오류로 보이는 표현",
+        detail: particleHits.map(h=>`<span class="mono">${escapeHtml(h)}</span>`).join('<br>')
+      });
+    }
+
+    // 3) immediately repeated word (예: "계획을을", "학생 학생")
+    const repeatRe = /([가-힣A-Za-z0-9]{2,})\s+\1(?![가-힣A-Za-z0-9])/g;
+    const repeats = new Set();
+    let rm;
+    while((rm = repeatRe.exec(text))){
+      repeats.add(rm[1]);
+    }
+    if(repeats.size){
+      items.push({
+        status:'warn', title:'같은 단어가 연달아 반복됨',
+        detail: [...repeats].map(w=>`<span class="mono">${escapeHtml(w)} ${escapeHtml(w)}</span>`).join(', ') + ' — 오타이거나 삭제되지 않은 중복일 수 있습니다.'
+      });
+    }
+
+    // 4) bracket / parenthesis balance
+    const pairs = [['(',')'],['[',']'],['{','}'],['「','」'],['《','》'],['〈','〉']];
+    const unbalanced = [];
+    for(const [open, close] of pairs){
+      const openCount = (text.match(new RegExp('\\'+open,'g'))||[]).length;
+      const closeCount = (text.match(new RegExp('\\'+close,'g'))||[]).length;
+      if(openCount !== closeCount) unbalanced.push(`${open}${close} — 여는 괄호 ${openCount}개 / 닫는 괄호 ${closeCount}개`);
+    }
+    if(unbalanced.length){
+      items.push({
+        status:'warn', title:'괄호 짝이 맞지 않음',
+        detail: unbalanced.join('<br>') + '<br>정확한 위치는 직접 확인이 필요합니다.'
+      });
+    }
+
+    if(items.length === 0){
+      items.push({status:'ok', title:'오타 점검', detail:'흔한 맞춤법 오류, 조사 오류, 단어 반복, 괄호 짝 불일치가 발견되지 않았습니다.'});
+    }
+    return items;
+  }
+
   function ruleThinkingPhrase(ctx){
     const found = ctx.fullText.includes('생각의 힘을 나누는 학년');
     if(!found) return {status:'ok', title:"'생각의 힘을 나누는 학년' 문구", detail:'해당 문구가 없습니다 — 이상 없음.'};
@@ -1035,6 +1134,7 @@
       results.push(...ruleBaseScore(ctx));
       results.push(ruleDigitalHours(ctx));
       results.push(ruleThinkingPhrase(ctx));
+      results.push(...ruleTypos(ctx));
       results.push(ruleTemplateStructure(ctx));
 
       renderResults(results);
