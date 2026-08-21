@@ -347,6 +347,7 @@
           채점 기준 문장 제안 받기
           <span class="sub">Suggest rubric wording · Claude</span>
         </button>
+        <p class="hint" style="margin-top:8px;">※ 기본 설정은 Claude.ai 대화창(아티팩트)에서 열었을 때만 작동합니다. GitHub Pages 등에 올려서 쓰려면 코드 상단의 <span class="mono">AI_ENDPOINT</span> 값을 본인의 프록시 서버 주소로 바꿔주세요 (설정 방법 별도 안내).</p>
         <div id="aiSuggestResults"></div>
       </div>
 
@@ -863,48 +864,61 @@
   }
 
   function ruleRatio100(ctx){
-    for(const rows of ctx.tables){
-      for(const row of rows){
-        if((row[0]||'').trim() === '반영비율'){
-          const cells = row.slice(1);
-          if(cells.length < 2) continue;
-          // last cell is the declared "합계" column — don't add it into the sum,
-          // just use it as the number to check against 100%.
-          const last = cells[cells.length - 1];
-          const lastMatch = (last||'').match(/(\d+(\.\d+)?)\s*%/);
-          const declaredTotal = lastMatch ? parseFloat(lastMatch[1]) : null;
-          const componentSum = sumPercentsInRow(cells.slice(0, -1));
-
-          if(declaredTotal === null && componentSum === null) continue;
-          const total = declaredTotal !== null ? declaredTotal : componentSum;
-
-          if(Math.abs(total - 100) > 0.5){
-            return {status:'issue', title:'정기시험+수행평가 반영비율 합계 오류', detail:`합계가 ${total}%로 100%가 아닙니다.`};
-          }
-          if(componentSum !== null && declaredTotal !== null && Math.abs(componentSum - declaredTotal) > 0.5){
-            return {status:'issue', title:'정기시험+수행평가 반영비율 합계 오류', detail:`개별 항목의 합(${componentSum}%)이 표에 적힌 합계(${declaredTotal}%)와 다릅니다.`};
-          }
-          return {status:'ok', title:'정기시험+수행평가 반영비율 합계', detail:'합계 100%로 정확합니다.'};
-        }
-      }
+    const row = findRatioRow(ctx.tables);
+    if(!row){
+      return {status:'warn', title:'반영비율 합계 확인 불가', detail:"'정기시험/수행평가' 반영비율 행을 찾지 못했습니다."};
     }
-    return {status:'warn', title:'반영비율 합계 확인 불가', detail:"'반영비율' 행을 찾지 못했습니다."};
+    const values = row.slice(1).map(firstPercent).filter(v => v !== null);
+    if(values.length === 0){
+      return {status:'warn', title:'반영비율 합계 확인 불가', detail:'퍼센트 값을 해석하지 못했습니다.'};
+    }
+    if(values.length === 1){
+      const only = values[0];
+      return Math.abs(only - 100) <= 0.5
+        ? {status:'ok', title:'정기시험+수행평가 반영비율 합계', detail:'합계 100%로 정확합니다.'}
+        : {status:'issue', title:'정기시험+수행평가 반영비율 합계 오류', detail:`합계가 ${only}%로 100%가 아닙니다.`};
+    }
+
+    // the last cell is the declared grand total in every real template layout —
+    // trust it as the total, and separately confirm the earlier cells add up to
+    // it, instead of summing every cell (which double-counts the total itself).
+    const last = values[values.length - 1];
+    const partsSum = values.slice(0, -1).reduce((a, b) => a + b, 0);
+
+    if(Math.abs(last - 100) > 0.5){
+      return {status:'issue', title:'정기시험+수행평가 반영비율 합계 오류', detail:`합계가 ${last}%로 100%가 아닙니다.`};
+    }
+    if(Math.abs(partsSum - last) > 0.5){
+      return {status:'issue', title:'정기시험+수행평가 반영비율 합계 오류', detail:`개별 항목의 합(${partsSum}%)이 표에 적힌 합계(${last}%)와 다릅니다.`};
+    }
+    return {status:'ok', title:'정기시험+수행평가 반영비율 합계', detail:'합계 100%로 정확합니다.'};
+  }
+
+  function firstPercent(cell){
+    const m = (cell||'').match(/(\d+(?:\.\d+)?)\s*%/);
+    return m ? parseFloat(m[1]) : null;
+  }
+
+  // Only look inside the table whose header actually mentions both 정기시험
+  // and 수행평가 — otherwise a stray "반영비율" label elsewhere (or leftover
+  // guide text) can get matched by mistake.
+  function findRatioRow(tables){
+    for(const rows of tables){
+      const headerText = rows.slice(0, 2).map(r => r.join(' ')).join(' ');
+      if(!headerText.includes('정기시험') || !headerText.includes('수행평가')) continue;
+      const hit = rows.find(row => (row[0]||'').trim() === '반영비율');
+      if(hit) return hit;
+    }
+    return null;
   }
 
   function getPerformancePercentFromRatioRow(ctx){
-    for(const rows of ctx.tables){
-      for(const row of rows){
-        if((row[0]||'').trim() === '반영비율'){
-          const cells = row.slice(1);
-          if(cells.length < 2) return null;
-          // layout is [...정기시험 columns..., 수행평가%, 합계%] — second-to-last is 수행평가
-          const perfCell = cells[cells.length - 2];
-          const m = (perfCell||'').match(/(\d+(\.\d+)?)\s*%/);
-          return m ? parseFloat(m[1]) : null;
-        }
-      }
-    }
-    return null;
+    const row = findRatioRow(ctx.tables);
+    if(!row) return null;
+    const values = row.slice(1).map(firstPercent).filter(v => v !== null);
+    if(values.length < 2) return null;
+    // layout is [...정기시험 columns..., 수행평가%, 합계%] — second-to-last is 수행평가
+    return values[values.length - 2];
   }
 
   function ruleAreaMaxScores(ctx){
@@ -1037,6 +1051,14 @@
     return groups;
   }
 
+  // API endpoint the "AI 문장 제안" feature calls.
+  // - Inside Claude.ai (this artifact), the default value below works as-is —
+  //   Claude.ai auto-handles auth for calls to api.anthropic.com.
+  // - On GitHub Pages (or any other static host), browsers cannot call
+  //   api.anthropic.com directly (no API key, CORS blocked). Set this to your
+  //   own proxy server URL instead — see the Cloudflare Worker setup guide.
+  const AI_ENDPOINT = 'https://api.anthropic.com/v1/messages';
+
   async function fetchAiSuggestions(groups){
     const payload = groups.map(g => ({
       area: g.areaName,
@@ -1064,15 +1086,28 @@
 검토 대상:
 ${JSON.stringify(payload, null, 0)}`;
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 4000,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
+    let res;
+    try{
+      res = await fetch(AI_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 4000,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+    } catch(networkErr){
+      const usingDefault = AI_ENDPOINT === 'https://api.anthropic.com/v1/messages';
+      throw new Error(
+        usingDefault
+          ? 'AI 제안 기능은 이 페이지를 Claude.ai 대화창(아티팩트)에서 열었을 때만 작동합니다. ' +
+            'Claude.ai가 그 안에서 아무 설정 없이 Claude API를 호출할 수 있게 자동으로 중계해 주는 특별한 환경이기 때문입니다. ' +
+            'GitHub Pages처럼 이 파일을 따로 올려서 열면, 브라우저가 api.anthropic.com에 직접 요청을 보낼 수 없어(CORS 제한, API 키 없음) 이 오류가 납니다. ' +
+            '다른 검토 항목들(작성요령·반영비율·오타 등)은 이 파일만으로 그대로 잘 작동합니다. GitHub Pages에서도 이 기능을 쓰려면 코드 상단의 AI_ENDPOINT 값을 본인의 프록시 서버 주소로 바꿔주세요.'
+          : `프록시 서버(${AI_ENDPOINT})에 연결하지 못했습니다. 주소가 맞는지, 서버가 켜져 있는지, CORS 설정이 이 페이지의 주소를 허용하는지 확인해 주세요.`
+      );
+    }
     if(!res.ok) throw new Error(`API 요청 실패 (HTTP ${res.status})`);
     const data = await res.json();
     const text = (data.content || []).map(b => b.text || '').join('');
