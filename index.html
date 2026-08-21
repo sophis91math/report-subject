@@ -428,7 +428,6 @@
 
     let paragraphs = [];
     let tables = [];
-    let fullTextParts = [];
 
     for(const name of sectionNames){
       const xmlText = await zip.file(name).async('string');
@@ -442,16 +441,14 @@
       for(const child of Array.from(root.children)){
         if(child.tagName !== 'hp:p') continue;
         const hasTbl = child.getElementsByTagName('hp:tbl').length > 0;
+        if(hasTbl) continue; // its text is reconstructed properly from the table cells below
         const ts = child.getElementsByTagName('hp:t');
         let txt = '';
         for(const t of ts) txt += (t.textContent || '');
-        if(!hasTbl){
-          if(txt.trim()) paragraphs.push(txt);
-        }
-        fullTextParts.push(txt);
+        if(txt.trim()) paragraphs.push(txt);
       }
 
-      // all tables -> 2D arrays
+      // all tables -> 2D arrays (cells are already joined with spaces by getCellText)
       const tbls = doc.getElementsByTagName('hp:tbl');
       for(const tbl of tbls){
         const trs = Array.from(tbl.children).filter(c=>c.tagName==='hp:tr');
@@ -465,7 +462,13 @@
       }
     }
 
-    const fullText = fullTextParts.join(' ').normalize('NFC');
+    // Build fullText from properly-spaced units only (paragraph text + table cell
+    // text), instead of raw recursive textContent, so words/cells never run
+    // together without a separator — that run-together text was hiding some
+    // typo/particle matches whose target phrase straddled a cell boundary.
+    const tableText = tables.map(rows => rows.map(row => row.join(' ')).join(' ')).join(' ');
+    const fullText = (paragraphs.join(' ') + ' ' + tableText).normalize('NFC');
+
     return { paragraphs, tables, fullText };
   }
 
@@ -920,7 +923,26 @@
     ['않맞','안 맞'],
     ['일일히','일일이'],
     ['틀리지 않','다르지 않'],
+    ['이야기기','이야기'],
   ];
+
+  const DOUBLED_SYLLABLE_WHITELIST = [
+    '스스로','점점','종종','곰곰','꼼꼼','서서히','씩씩','딱딱','쓱쓱','톡톡','탁탁',
+    '짝짝','훨훨','펄펄','졸졸','줄줄','살살','슬슬','근근이','간간히','누누이',
+    '좍좍','뚝뚝','펑펑','한한','다다','또또','오오','성성','조조',
+  ];
+
+  function findDoubledSyllables(text){
+    const re = /[가-힣]*([가-힣])\1[가-힣]*/g;
+    const found = new Set();
+    let m;
+    while((m = re.exec(text))){
+      const word = m[0];
+      if(DOUBLED_SYLLABLE_WHITELIST.some(p => word.includes(p))) continue;
+      found.add(word);
+    }
+    return [...found];
+  }
 
   const PARTICLE_TERMS = [
     {term:'정기시험', wrong:'를', correct:'을'},
@@ -966,7 +988,16 @@
       });
     }
 
-    // 3) immediately repeated word (예: "계획을을", "학생 학생")
+    // 3) doubled syllable inside a word (예: "이야기기", "제출출")
+    const doubled = findDoubledSyllables(text);
+    if(doubled.length){
+      items.push({
+        status:'issue', title:'글자가 중복 입력된 것으로 보이는 표현',
+        detail: doubled.map(w=>`<span class="mono">${escapeHtml(w)}</span>`).join(', ')
+      });
+    }
+
+    // 4) immediately repeated word (예: "계획을을", "학생 학생")
     const repeatRe = /([가-힣A-Za-z0-9]{2,})\s+\1(?![가-힣A-Za-z0-9])/g;
     const repeats = new Set();
     let rm;
@@ -980,7 +1011,7 @@
       });
     }
 
-    // 4) bracket / parenthesis balance
+    // 5) bracket / parenthesis balance
     const pairs = [['(',')'],['[',']'],['{','}'],['「','」'],['《','》'],['〈','〉']];
     const unbalanced = [];
     for(const [open, close] of pairs){
@@ -1126,7 +1157,6 @@
       results.push(leftoverResult);
       results.push(...ruleCodes(ctx));
       results.push(...ruleAreaNames(ctx));
-      results.push(...ruleElementsVsStandards(ctx));
       results.push(ruleElementsMatch(ctx));
       results.push(ruleEssayRatio(ctx));
       results.push(ruleRatio100(ctx));
