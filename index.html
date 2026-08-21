@@ -631,6 +631,77 @@
     return items;
   }
 
+  function stripParenScore(s){
+    return s.replace(/\(\s*\d+\s*점\s*\)/g, '').trim();
+  }
+
+  function getRegionElementLabels(rows){
+    const labels = [];
+    for(const r of rows){
+      const c0 = (r[0]||'').trim();
+      if(/\(\s*\d+\s*점\s*\)\s*$/.test(c0)) labels.push(stripParenScore(c0));
+    }
+    return labels;
+  }
+
+  function findOverviewElementsRow(tables){
+    for(const rows of tables){
+      for(const row of rows){
+        const c0 = row[0]||'';
+        if(c0.includes('평가요소') && row.slice(1).some(c => (c||'').includes('∘'))){
+          return row;
+        }
+      }
+    }
+    return null;
+  }
+
+  function ruleElementsMatch(ctx){
+    const perfTables = findPerformanceTables(ctx.tables);
+    if(perfTables.length === 0){
+      return {status:'warn', title:'평가요소 일치 여부 확인 불가', detail:"'평가 영역명' 표를 찾지 못했습니다."};
+    }
+    const overviewRow = findOverviewElementsRow(ctx.tables);
+    if(!overviewRow){
+      return {status:'warn', title:'평가요소 일치 여부 확인 불가', detail:'"4. 평가 계획 개요"에서 평가요소가 나열된 행을 찾지 못했습니다.'};
+    }
+
+    const groups = overviewRow.slice(1).filter(c => (c||'').includes('∘'));
+    const K = perfTables.length;
+    const perfGroups = groups.slice(-K);
+
+    if(perfGroups.length !== K){
+      return {status:'warn', title:'평가요소 일치 여부 확인 불가', detail:`영역 수(${K})와 "4. 평가 계획 개요"의 평가요소 그룹 수(${perfGroups.length})가 맞지 않아 자동 대조가 어렵습니다.`};
+    }
+
+    const mismatches = [];
+    perfTables.forEach((rows, idx) => {
+      const name = (rows[0][1]||'').trim() || `영역${idx+1}`;
+      const detailLabels = new Set(getRegionElementLabels(rows));
+      const overviewLabels = new Set(
+        perfGroups[idx].split('∘').map(s => stripParenScore(s.replace(/^[\s/]+|[\s/]+$/g,''))).filter(Boolean)
+      );
+      const onlyInOverview = [...overviewLabels].filter(x => !detailLabels.has(x));
+      const onlyInDetail = [...detailLabels].filter(x => !overviewLabels.has(x));
+      if(onlyInOverview.length || onlyInDetail.length){
+        mismatches.push({name, onlyInOverview, onlyInDetail});
+      }
+    });
+
+    if(mismatches.length === 0){
+      return {status:'ok', title:'"4.평가계획개요" ↔ "5.수행평가 세부기준" 평가요소 문구 일치', detail:'모든 영역에서 평가요소 문구가 정확히 일치합니다.'};
+    }
+
+    const detail = mismatches.map(m => {
+      const parts = [];
+      if(m.onlyInOverview.length) parts.push(`4번 표에만 있음: ${m.onlyInOverview.map(x=>`<span class="mono">${escapeHtml(x)}</span>`).join(', ')}`);
+      if(m.onlyInDetail.length) parts.push(`5번 세부기준에만 있음: ${m.onlyInDetail.map(x=>`<span class="mono">${escapeHtml(x)}</span>`).join(', ')}`);
+      return `[${escapeHtml(m.name)}] ` + parts.join(' / ');
+    }).join('<br>');
+
+    return {status:'issue', title:'"4.평가계획개요" ↔ "5.수행평가 세부기준" 평가요소 문구 불일치', detail};
+  }
+
   function parsePoint(str){
     if(!str) return null;
     const m = String(str).replace(/\s/g,'').match(/-?\d+(\.\d+)?/);
@@ -727,6 +798,63 @@
       }
     }
     return {status:'warn', title:'반영비율 합계 확인 불가', detail:"'반영비율' 행을 찾지 못했습니다."};
+  }
+
+  function ruleTeachingPlanVsSchedule(ctx){
+    // 1. gather ★수행평가 weeks from the monthly (월/주) teaching-plan tables
+    const foundWeeks = [];
+    for(const rows of ctx.tables){
+      if(!rows.length) continue;
+      const header = rows[0];
+      if(!header[0] || header[0].trim() !== '월') continue;
+      if(!header[1] || header[1].trim() !== '주') continue;
+      let currentMonth = null;
+      for(let i=1; i<rows.length; i++){
+        const row = rows[i];
+        if(row[0] && row[0].trim()){
+          const mm = row[0].trim().match(/\d+/);
+          if(mm) currentMonth = mm[0];
+        }
+        const weekMatch = (row[1]||'').match(/\d+/);
+        const week = weekMatch ? weekMatch[0] : null;
+        const rowText = row.join(' ');
+        if(rowText.includes('★수행평가') && currentMonth && week){
+          foundWeeks.push(`${currentMonth}월${week}주`);
+        }
+      }
+    }
+    const foundSet = new Set(foundWeeks);
+
+    // 2. gather declared "평가 시기" values from the evaluation-overview table
+    const declared = [];
+    for(const rows of ctx.tables){
+      for(const row of rows){
+        const c0 = (row[0]||'');
+        if(c0.includes('평가 시기')){
+          for(let i=1; i<row.length; i++){
+            const m = (row[i]||'').match(/(\d+)\s*월\s*(\d+)\s*주/g);
+            if(m) declared.push(...m.map(x => x.replace(/\s+/g,'')));
+          }
+        }
+      }
+    }
+    const declaredSet = new Set(declared);
+
+    if(foundSet.size === 0 && declaredSet.size === 0){
+      return {status:'warn', title:'월별 계획표 ↔ 평가 시기 대조 확인 불가', detail:'월별 계획표의 ★수행평가 표시나 "4. 평가 계획 개요"의 평가 시기 값을 찾지 못했습니다.'};
+    }
+
+    const missingInSchedule = [...foundSet].filter(w => !declaredSet.has(w));
+    const missingInPlan = [...declaredSet].filter(w => !foundSet.has(w));
+
+    if(missingInSchedule.length === 0 && missingInPlan.length === 0){
+      return {status:'ok', title:'월별 계획표 ★수행평가 시기 ↔ 평가 시기 일치', detail:`양쪽 모두 ${[...foundSet].join(', ')}로 일치합니다.`};
+    }
+
+    const details = [];
+    if(missingInSchedule.length) details.push(`월별 계획표에는 ★수행평가로 표시되어 있지만 "평가 시기"에는 없음: <span class="mono">${missingInSchedule.join(', ')}</span>`);
+    if(missingInPlan.length) details.push(`"평가 시기"에는 있지만 월별 계획표에 ★수행평가 표시가 없음: <span class="mono">${missingInPlan.join(', ')}</span>`);
+    return {status:'issue', title:'월별 계획표의 ★수행평가 시기와 "평가 시기"가 일치하지 않음', detail: details.join('<br>')};
   }
 
   function ruleDigitalHours(ctx){
@@ -897,8 +1025,10 @@
       results.push(...ruleCodes(ctx));
       results.push(...ruleAreaNames(ctx));
       results.push(...ruleElementsVsStandards(ctx));
+      results.push(ruleElementsMatch(ctx));
       results.push(ruleEssayRatio(ctx));
       results.push(ruleRatio100(ctx));
+      results.push(ruleTeachingPlanVsSchedule(ctx));
       results.push(...ruleBaseScore(ctx));
       results.push(ruleDigitalHours(ctx));
       results.push(ruleThinkingPhrase(ctx));
