@@ -230,6 +230,27 @@
   .dot{ width:6px;height:6px;border-radius:50%; background:var(--red); animation:blink 1s infinite; }
   .dot:nth-child(2){animation-delay:.15s;} .dot:nth-child(3){animation-delay:.3s;}
   @keyframes blink{ 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
+
+  .ai-btn{ background:var(--blue); margin-top:4px; }
+  .ai-btn:hover:not(:disabled){ background:#1c3550; }
+  .ai-card{
+    background:#fff; border:1px solid var(--line-strong); border-left:4px solid var(--blue);
+    margin: 14px 0; padding:14px 18px; animation: rise .35s ease both;
+  }
+  .ai-card-head{
+    font-family:"Noto Serif KR",serif; font-weight:700; font-size:14.5px; margin-bottom:10px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .ai-card-head .badge{ background:var(--blue-soft); color:var(--blue); }
+  .ai-tier{ margin-bottom:12px; padding-bottom:12px; border-bottom:1px dashed var(--line); }
+  .ai-tier:last-child{ border:none; margin-bottom:0; padding-bottom:0; }
+  .ai-score{
+    font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:600;
+    background:var(--blue-soft); color:var(--blue); padding:2px 7px; border-radius:2px; margin-right:2px;
+  }
+  .ai-orig{ font-size:12.5px; color:var(--ink-faint); margin:5px 0 3px; text-decoration:line-through; text-decoration-color:var(--line-strong); }
+  .ai-imp{ font-size:13.5px; color:var(--ink); font-weight:500; }
+  .ai-imp::before{ content:"→ "; color:var(--blue); font-weight:700; }
 </style>
 </head>
 <body>
@@ -319,6 +340,16 @@
         </div>
       </div>
 
+      <div id="aiSuggestWrap" style="display:none;">
+        <div class="section-divider">AI 문장 제안 (선택)</div>
+        <p class="hint" style="margin-bottom:10px;">"5. 수행평가 세부 기준"의 채점 기준 문장을 Claude가 읽고, 더 객관적이고 배점 차이에 어울리게 구체적인 문장으로 바꿔볼 것을 제안합니다. 점수 구간·개수는 바꾸지 않습니다.</p>
+        <button class="run-btn ai-btn" id="aiSuggestBtn">
+          채점 기준 문장 제안 받기
+          <span class="sub">Suggest rubric wording · Claude</span>
+        </button>
+        <div id="aiSuggestResults"></div>
+      </div>
+
       <div class="seal-wrap"><svg id="seal" class="seal" viewBox="0 0 120 120">
           <circle cx="60" cy="60" r="54" fill="none" stroke="#B8341F" stroke-width="3"/>
           <circle cx="60" cy="60" r="45" fill="none" stroke="#B8341F" stroke-width="1.2"/>
@@ -348,6 +379,10 @@
   const pillOk = document.getElementById('pillOk');
   const seal = document.getElementById('seal');
   const sealDate = document.getElementById('sealDate');
+  const aiSuggestWrap = document.getElementById('aiSuggestWrap');
+  const aiSuggestBtn = document.getElementById('aiSuggestBtn');
+  const aiSuggestResults = document.getElementById('aiSuggestResults');
+  let lastCtx = null;
 
   const stdDropZone = document.getElementById('stdDropZone');
   const stdFileInput = document.getElementById('stdFileInput');
@@ -426,8 +461,36 @@
     const sectionNames = Object.keys(zip.files).filter(n => /^Contents\/section\d+\.xml$/.test(n)).sort();
     if(sectionNames.length === 0) throw new Error('Contents/section*.xml을 찾을 수 없습니다. 올바른 hwpx 파일인지 확인해 주세요.');
 
+    // hwpx has no fixed "page number" (it reflows on open), so instead we tag
+    // every chunk of text with the nearest preceding section/month heading —
+    // that's what gets shown as "위치" next to each finding.
+    const SECTION_MARKERS = [
+      /^\d{1,2}월$/,
+      /^\d+\.\s*평가의\s*목적/,
+      /^\d+\.\s*평가의\s*기본방향과\s*방침/,
+      /^\d+\.\s*성취기준\s*및/,
+      /^\d+\.\s*평가\s*계획\s*개요/,
+      /^\d+\.\s*수행평가\s*세부\s*기준/,
+      /^\d+\.\s*정의적\s*능력\s*평가/,
+      /^\d+\.\s*수행평가\s*미응시자/,
+      /^\d+\.\s*수행평가\s*유의사항/,
+      /^\d+\.\s*평가\s*결과\s*분석/,
+      /^가\.\s*기본방향/, /^나\.\s*방침/,
+      /^가\.\s*성취기준별/, /^나\.\s*학기\s*단위/,
+      /^가\.\s*평가의\s*종류/, /^나\.\s*성취율/,
+    ];
+    function detectMarker(t){
+      const trimmed = t.trim();
+      for(const re of SECTION_MARKERS){
+        if(re.test(trimmed)) return trimmed.slice(0, 30);
+      }
+      return null;
+    }
+
     let paragraphs = [];
     let tables = [];
+    let chunks = [];
+    let currentLocation = '표지/기본정보';
 
     for(const name of sectionNames){
       const xmlText = await zip.file(name).async('string');
@@ -437,28 +500,36 @@
       }
       const root = doc.documentElement;
 
-      // top-level paragraphs (no nested table) = narrative prose
+      // single pass over top-level paragraphs, in document order, so text
+      // chunks and their nearest section heading stay correctly interleaved
       for(const child of Array.from(root.children)){
         if(child.tagName !== 'hp:p') continue;
         const hasTbl = child.getElementsByTagName('hp:tbl').length > 0;
-        if(hasTbl) continue; // its text is reconstructed properly from the table cells below
-        const ts = child.getElementsByTagName('hp:t');
-        let txt = '';
-        for(const t of ts) txt += (t.textContent || '');
-        if(txt.trim()) paragraphs.push(txt);
-      }
 
-      // all tables -> 2D arrays (cells are already joined with spaces by getCellText)
-      const tbls = doc.getElementsByTagName('hp:tbl');
-      for(const tbl of tbls){
-        const trs = Array.from(tbl.children).filter(c=>c.tagName==='hp:tr');
-        const rows = [];
-        for(const tr of trs){
-          const tcs = Array.from(tr.children).filter(c=>c.tagName==='hp:tc');
-          const row = tcs.map(getCellText);
-          rows.push(row);
+        if(!hasTbl){
+          const ts = child.getElementsByTagName('hp:t');
+          let txt = '';
+          for(const t of ts) txt += (t.textContent || '');
+          if(txt.trim()){
+            paragraphs.push(txt);
+            const marker = detectMarker(txt);
+            if(marker) currentLocation = marker;
+            chunks.push({ text: txt, location: currentLocation });
+          }
+        } else {
+          const tbls = child.getElementsByTagName('hp:tbl');
+          for(const tbl of tbls){
+            const trs = Array.from(tbl.children).filter(c=>c.tagName==='hp:tr');
+            const rows = [];
+            for(const tr of trs){
+              const tcs = Array.from(tr.children).filter(c=>c.tagName==='hp:tc');
+              rows.push(tcs.map(getCellText));
+            }
+            tables.push(rows);
+            const tableText = rows.map(r => r.join(' ')).join(' ');
+            if(tableText.trim()) chunks.push({ text: tableText, location: currentLocation });
+          }
         }
-        tables.push(rows);
       }
     }
 
@@ -468,8 +539,9 @@
     // typo/particle matches whose target phrase straddled a cell boundary.
     const tableText = tables.map(rows => rows.map(row => row.join(' ')).join(' ')).join(' ');
     const fullText = (paragraphs.join(' ') + ' ' + tableText).normalize('NFC');
+    chunks = chunks.map(c => ({ text: c.text.normalize('NFC'), location: c.location }));
 
-    return { paragraphs, tables, fullText };
+    return { paragraphs, tables, fullText, chunks };
   }
 
   function getCellText(tc){
@@ -794,10 +866,23 @@
     for(const rows of ctx.tables){
       for(const row of rows){
         if((row[0]||'').trim() === '반영비율'){
-          const total = sumPercentsInRow(row.slice(1));
-          if(total === null) continue;
+          const cells = row.slice(1);
+          if(cells.length < 2) continue;
+          // last cell is the declared "합계" column — don't add it into the sum,
+          // just use it as the number to check against 100%.
+          const last = cells[cells.length - 1];
+          const lastMatch = (last||'').match(/(\d+(\.\d+)?)\s*%/);
+          const declaredTotal = lastMatch ? parseFloat(lastMatch[1]) : null;
+          const componentSum = sumPercentsInRow(cells.slice(0, -1));
+
+          if(declaredTotal === null && componentSum === null) continue;
+          const total = declaredTotal !== null ? declaredTotal : componentSum;
+
           if(Math.abs(total - 100) > 0.5){
             return {status:'issue', title:'정기시험+수행평가 반영비율 합계 오류', detail:`합계가 ${total}%로 100%가 아닙니다.`};
+          }
+          if(componentSum !== null && declaredTotal !== null && Math.abs(componentSum - declaredTotal) > 0.5){
+            return {status:'issue', title:'정기시험+수행평가 반영비율 합계 오류', detail:`개별 항목의 합(${componentSum}%)이 표에 적힌 합계(${declaredTotal}%)와 다릅니다.`};
           }
           return {status:'ok', title:'정기시험+수행평가 반영비율 합계', detail:'합계 100%로 정확합니다.'};
         }
@@ -805,6 +890,206 @@
     }
     return {status:'warn', title:'반영비율 합계 확인 불가', detail:"'반영비율' 행을 찾지 못했습니다."};
   }
+
+  function getPerformancePercentFromRatioRow(ctx){
+    for(const rows of ctx.tables){
+      for(const row of rows){
+        if((row[0]||'').trim() === '반영비율'){
+          const cells = row.slice(1);
+          if(cells.length < 2) return null;
+          // layout is [...정기시험 columns..., 수행평가%, 합계%] — second-to-last is 수행평가
+          const perfCell = cells[cells.length - 2];
+          const m = (perfCell||'').match(/(\d+(\.\d+)?)\s*%/);
+          return m ? parseFloat(m[1]) : null;
+        }
+      }
+    }
+    return null;
+  }
+
+  function ruleAreaMaxScores(ctx){
+    const perfTables = findPerformanceTables(ctx.tables);
+    if(perfTables.length === 0){
+      return [{status:'warn', title:'영역 만점 합계 확인 불가', detail:"'평가 영역명' 표를 찾지 못했습니다."}];
+    }
+    const items = [];
+
+    // (a) sum of each 수행평가 area's OWN 영역만점 (from its own "5.수행평가 세부기준" table,
+    // not from the combined overview row — that row also has 정기시험 columns which use a
+    // different raw-score scale and would corrupt the sum) vs the declared 수행평가 반영비율(%)
+    let sumAreaMax = 0;
+    const areaMaxList = [];
+    for(const rows of perfTables){
+      const header = rows[0];
+      const idx = header.findIndex(c => (c||'').includes('영역만점'));
+      const name = (header[1]||'').trim() || '(이름 미확인)';
+      if(idx >= 0 && header[idx+1]){
+        const val = parsePoint(header[idx+1]);
+        if(val !== null){ sumAreaMax += val; areaMaxList.push(`${name} ${val}점`); }
+      }
+    }
+    const perfPercent = getPerformancePercentFromRatioRow(ctx);
+
+    if(areaMaxList.length === 0){
+      items.push({status:'warn', title:'영역 만점 합계 확인 불가', detail:'영역별 만점 값을 찾지 못했습니다.'});
+    } else if(perfPercent === null){
+      items.push({status:'warn', title:'영역 만점 합계 확인 불가', detail:`영역별 만점의 합은 ${sumAreaMax}점이지만, 수행평가 반영비율(%)을 찾지 못해 대조하지 못했습니다.`});
+    } else if(Math.abs(sumAreaMax - perfPercent) > 0.5){
+      items.push({
+        status:'issue', title:'영역 만점 합계가 수행평가 반영비율과 다름',
+        detail:`영역별 만점의 합은 ${sumAreaMax}점인데, 수행평가 반영비율은 ${perfPercent}%입니다. (개별: ${areaMaxList.join(', ')})`
+      });
+    } else {
+      items.push({status:'ok', title:'영역 만점 합계', detail:`영역별 만점의 합(${sumAreaMax}점)이 수행평가 반영비율(${perfPercent}%)과 일치합니다.`});
+    }
+
+    // (b) per-area 점수(%) 표기 일치 — only check the 수행평가 columns of the combined
+    // overview row (last K groups, K = number of 수행평가 영역), since 정기시험 columns use
+    // a raw exam score that is NOT expected to equal its %.
+    let targetRow = null;
+    for(const rows of ctx.tables){
+      for(const row of rows){
+        if((row[0]||'').includes('영역 만점')){ targetRow = row; break; }
+      }
+      if(targetRow) break;
+    }
+    if(targetRow){
+      const rowText = targetRow.slice(1).join(' ');
+      const pairRe = /(\d+(?:\.\d+)?)\s*점\s*\(\s*(\d+(?:\.\d+)?)\s*%\s*\)/g;
+      const pairs = [];
+      let m;
+      while((m = pairRe.exec(rowText))) pairs.push({ score: parseFloat(m[1]), percent: parseFloat(m[2]) });
+      const K = perfTables.length;
+      const perfPairs = pairs.slice(-K);
+
+      if(perfPairs.length === K && K > 0){
+        const mismatched = perfPairs.filter(p => Math.abs(p.score - p.percent) > 0.001);
+        if(mismatched.length){
+          items.push({
+            status:'issue', title:'수행평가 영역의 만점(점)과 반영비율(%) 수치 불일치',
+            detail: mismatched.map(p=>`${p.score}점(${p.percent}%)`).join(', ') + ' — 예: "30점(30%)"처럼 점수와 비율(%) 숫자가 같아야 합니다.'
+          });
+        } else {
+          items.push({status:'ok', title:'수행평가 영역 만점 ↔ 반영비율(%) 수치 일치', detail:'모든 수행평가 영역에서 점수와 비율(%) 숫자가 일치합니다.'});
+        }
+      }
+    }
+
+    return items;
+  }
+
+  // ---------- AI rubric-wording suggestions (opt-in, calls the Claude API) ----------
+  function extractRubricElements(rows){
+    const areaName = (rows[0][1]||'').trim() || '(이름 미확인)';
+    const elements = [];
+    let current = null;
+    for(const r of rows){
+      const c0 = (r[0]||'').trim();
+      if(/\(\s*\d+\s*점\s*\)\s*$/.test(c0) && r.length >= 3){
+        if(current) elements.push(current);
+        const maxMatch = c0.match(/\(\s*(\d+)\s*점\s*\)\s*$/);
+        current = { area: areaName, label: stripParenScore(c0), maxPoint: maxMatch?parseInt(maxMatch[1],10):null, tiers: [] };
+        current.tiers.push({ desc: (r[1]||'').trim(), score: parsePoint(r[r.length-1]) });
+      } else if(current && r.length === 2 && !/기본점수|미제출|장기\s*미인정|AI\s*활용/.test(c0)){
+        if(c0) current.tiers.push({ desc: c0, score: parsePoint(r[1]) });
+      } else if(/기본점수|미제출|장기\s*미인정/.test(c0)){
+        if(current){ elements.push(current); current = null; }
+      }
+    }
+    if(current) elements.push(current);
+    return elements.filter(e => e.tiers.length >= 2);
+  }
+
+  function collectAllRubricElements(ctx){
+    const perfTables = findPerformanceTables(ctx.tables);
+    let all = [];
+    for(const rows of perfTables) all = all.concat(extractRubricElements(rows));
+    return all;
+  }
+
+  async function fetchAiSuggestions(elements){
+    const payload = elements.map(e => ({
+      area: e.area, element: e.label, maxPoint: e.maxPoint,
+      tiers: e.tiers.map(t => ({ score: t.score, text: t.desc }))
+    }));
+
+    const prompt =
+`다음은 한국 중학교 수행평가 채점 기준(수행 수준) 문장 목록입니다. 각 평가요소마다 배점 구간별 문장이 있습니다.
+
+각 문장을 검토해서, 원문보다 더 매력적이고 객관적이며 배점 차이에 어울리게 구체적으로 구분되는 문장으로 다시 써주세요.
+- 점수가 높을수록/낮을수록 그 차이가 문장에서 뚜렷하게 드러나야 합니다.
+- "잘", "적절히", "우수하게" 같은 모호한 표현은 관찰 가능한 구체적 행동/결과로 바꿔주세요.
+- 점수 구간의 개수와 각 구간의 점수 값은 절대 바꾸지 마세요. 문장만 다듬어주세요.
+- 이미 충분히 좋은 문장은 원문과 거의 같게 반환해도 됩니다.
+
+반드시 아래 JSON 형식으로만 응답하세요. 다른 설명이나 코드펜스 없이 JSON 배열만 출력하세요:
+[{"area":"영역명","element":"평가요소명","tiers":[{"score":8,"original":"원문","improved":"제안 문장"}]}]
+
+검토 대상:
+${JSON.stringify(payload, null, 0)}`;
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    if(!res.ok) throw new Error(`API 요청 실패 (HTTP ${res.status})`);
+    const data = await res.json();
+    const text = (data.content || []).map(b => b.text || '').join('');
+    const cleaned = text.replace(/^```json\s*|```$/g, '').trim();
+    return JSON.parse(cleaned);
+  }
+
+  function renderAiSuggestions(groups){
+    if(!groups || groups.length === 0){
+      aiSuggestResults.innerHTML = `<div class="card warn"><div class="tab"></div><div class="card-body">
+        <div class="card-top"><span class="badge">확인필요</span><span class="card-title">제안을 받지 못했습니다</span></div>
+        <div class="card-detail">응답을 이해하지 못했습니다. 다시 시도해 주세요.</div>
+      </div></div>`;
+      return;
+    }
+    aiSuggestResults.innerHTML = groups.map(g => `
+      <div class="ai-card">
+        <div class="ai-card-head"><span class="badge">AI 제안</span>[${escapeHtml(g.area||'')}] ${escapeHtml(g.element||'')}</div>
+        ${(g.tiers||[]).map(t => `
+          <div class="ai-tier">
+            <span class="ai-score">${escapeHtml(String(t.score ?? ''))}점</span>
+            <div class="ai-orig">${escapeHtml(t.original||'')}</div>
+            <div class="ai-imp">${escapeHtml(t.improved||'')}</div>
+          </div>
+        `).join('')}
+      </div>
+    `).join('');
+  }
+
+  aiSuggestBtn.addEventListener('click', async () => {
+    if(!lastCtx) return;
+    const elements = collectAllRubricElements(lastCtx);
+    if(elements.length === 0){
+      aiSuggestResults.innerHTML = `<div class="card warn"><div class="tab"></div><div class="card-body">
+        <div class="card-top"><span class="badge">확인필요</span><span class="card-title">채점 기준 문장을 찾지 못했습니다</span></div>
+        <div class="card-detail">"5. 수행평가 세부 기준" 표 구조를 인식하지 못했습니다.</div>
+      </div></div>`;
+      return;
+    }
+    aiSuggestBtn.disabled = true;
+    aiSuggestResults.innerHTML = `<div class="loading-row"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;Claude가 채점 기준 문장을 검토하는 중입니다…</div>`;
+    try{
+      const groups = await fetchAiSuggestions(elements);
+      renderAiSuggestions(groups);
+    } catch(err){
+      aiSuggestResults.innerHTML = `<div class="card issue"><div class="tab"></div><div class="card-body">
+        <div class="card-top"><span class="badge">오류</span><span class="card-title">제안을 받아오지 못했습니다</span></div>
+        <div class="card-detail">${escapeHtml(err.message || String(err))}</div>
+      </div></div>`;
+    } finally {
+      aiSuggestBtn.disabled = false;
+    }
+  });
 
   function ruleTeachingPlanVsSchedule(ctx){
     // 1. gather ★수행평가 weeks from the monthly (월/주) teaching-plan tables
@@ -954,64 +1239,85 @@
     {term:'수행평가', wrong:'을', correct:'를'},
   ];
 
+  function locTag(location){
+    return location ? ` <span style="color:var(--ink-faint)">(위치: ${escapeHtml(location)})</span>` : '';
+  }
+
   function ruleTypos(ctx){
     const items = [];
-    const text = ctx.fullText;
+    const chunks = (ctx.chunks && ctx.chunks.length) ? ctx.chunks : [{ text: ctx.fullText, location: null }];
 
     // 1) curated typo dictionary
     const dictHits = [];
-    for(const [wrong, correct] of TYPO_DICTIONARY){
-      if(text.includes(wrong)) dictHits.push(`${wrong} → ${correct}`);
+    for(const chunk of chunks){
+      for(const [wrong, correct] of TYPO_DICTIONARY){
+        if(chunk.text.includes(wrong)) dictHits.push({ wrong, correct, location: chunk.location });
+      }
     }
     if(dictHits.length){
       items.push({
         status:'issue', title:'흔한 맞춤법 오류로 보이는 표현',
-        detail: dictHits.map(h=>`<span class="mono">${escapeHtml(h)}</span>`).join('<br>')
+        detail: dictHits.map(h=>`<span class="mono">${escapeHtml(h.wrong)} → ${escapeHtml(h.correct)}</span>${locTag(h.location)}`).join('<br>')
       });
     }
 
     // 2) domain 조사(을/를) 오류 — term + wrong particle, not followed by another Hangul syllable
-    const particleHits = [];
-    for(const {term, wrong, correct} of PARTICLE_TERMS){
-      const re = new RegExp(escapeRegex(term + wrong), 'g');
-      let m, count = 0;
-      while((m = re.exec(text))){
-        const nextChar = text[m.index + m[0].length] || '';
-        if(!/[가-힣]/.test(nextChar)) count++;
+    const particleGroups = {};
+    for(const chunk of chunks){
+      for(const {term, wrong, correct} of PARTICLE_TERMS){
+        const re = new RegExp(escapeRegex(term + wrong), 'g');
+        let m;
+        while((m = re.exec(chunk.text))){
+          const nextChar = chunk.text[m.index + m[0].length] || '';
+          if(/[가-힣]/.test(nextChar)) continue;
+          const key = term + wrong + '|' + chunk.location;
+          particleGroups[key] = particleGroups[key] || { term, wrong, correct, location: chunk.location, count: 0 };
+          particleGroups[key].count++;
+        }
       }
-      if(count > 0) particleHits.push(`${term}${wrong} → ${term}${correct} (${count}건)`);
     }
+    const particleHits = Object.values(particleGroups);
     if(particleHits.length){
       items.push({
-        status:'issue', title:"조사(을/를) 오류로 보이는 표현",
-        detail: particleHits.map(h=>`<span class="mono">${escapeHtml(h)}</span>`).join('<br>')
+        status:'issue', title:'조사(을/를) 오류로 보이는 표현',
+        detail: particleHits.map(h=>`<span class="mono">${escapeHtml(h.term+h.wrong)} → ${escapeHtml(h.term+h.correct)}</span> (${h.count}건)${locTag(h.location)}`).join('<br>')
       });
     }
 
     // 3) doubled syllable inside a word (예: "이야기기", "제출출")
-    const doubled = findDoubledSyllables(text);
-    if(doubled.length){
+    const doubledHits = [];
+    for(const chunk of chunks){
+      for(const w of findDoubledSyllables(chunk.text)) doubledHits.push({ word: w, location: chunk.location });
+    }
+    if(doubledHits.length){
       items.push({
         status:'issue', title:'글자가 중복 입력된 것으로 보이는 표현',
-        detail: doubled.map(w=>`<span class="mono">${escapeHtml(w)}</span>`).join(', ')
+        detail: doubledHits.map(h=>`<span class="mono">${escapeHtml(h.word)}</span>${locTag(h.location)}`).join('<br>')
       });
     }
 
     // 4) immediately repeated word (예: "계획을을", "학생 학생")
-    const repeatRe = /([가-힣A-Za-z0-9]{2,})\s+\1(?![가-힣A-Za-z0-9])/g;
-    const repeats = new Set();
-    let rm;
-    while((rm = repeatRe.exec(text))){
-      repeats.add(rm[1]);
+    const repeatHits = [];
+    const seenRepeat = new Set();
+    for(const chunk of chunks){
+      const re = /([가-힣A-Za-z0-9]{2,})\s+\1(?![가-힣A-Za-z0-9])/g;
+      let rm;
+      while((rm = re.exec(chunk.text))){
+        const key = rm[1] + '|' + chunk.location;
+        if(seenRepeat.has(key)) continue;
+        seenRepeat.add(key);
+        repeatHits.push({ word: rm[1], location: chunk.location });
+      }
     }
-    if(repeats.size){
+    if(repeatHits.length){
       items.push({
         status:'warn', title:'같은 단어가 연달아 반복됨',
-        detail: [...repeats].map(w=>`<span class="mono">${escapeHtml(w)} ${escapeHtml(w)}</span>`).join(', ') + ' — 오타이거나 삭제되지 않은 중복일 수 있습니다.'
+        detail: repeatHits.map(h=>`<span class="mono">${escapeHtml(h.word)} ${escapeHtml(h.word)}</span>${locTag(h.location)}`).join('<br>') + '<br>오타이거나 삭제되지 않은 중복일 수 있습니다.'
       });
     }
 
-    // 5) bracket / parenthesis balance
+    // 5) bracket / parenthesis balance — document-wide, no single location to point to
+    const text = ctx.fullText;
     const pairs = [['(',')'],['[',']'],['{','}'],['「','」'],['《','》'],['〈','〉']];
     const unbalanced = [];
     for(const [open, close] of pairs){
@@ -1027,7 +1333,7 @@
     }
 
     if(items.length === 0){
-      items.push({status:'ok', title:'오타 점검', detail:'흔한 맞춤법 오류, 조사 오류, 단어 반복, 괄호 짝 불일치가 발견되지 않았습니다.'});
+      items.push({status:'ok', title:'오타 점검', detail:'흔한 맞춤법 오류, 조사 오류, 글자 중복, 단어 반복, 괄호 짝 불일치가 발견되지 않았습니다.'});
     }
     return items;
   }
@@ -1120,7 +1426,7 @@
     seal.classList.remove('show');
 
     try{
-      const { paragraphs, tables, fullText } = await parseHwpx(currentFile);
+      const { paragraphs, tables, fullText, chunks } = await parseHwpx(currentFile);
 
       let stdInput = '';
       if(currentStdFile){
@@ -1148,7 +1454,7 @@
         templateError = tplErr.message || String(tplErr);
       }
 
-      const ctx = { paragraphs, tables, fullText, threshold, stdInput, grade, templateFullText, templateError, hasLeftover:false };
+      const ctx = { paragraphs, tables, fullText, chunks, threshold, stdInput, grade, templateFullText, templateError, hasLeftover:false };
 
       const leftoverResult = ruleLeftoverMarkers(ctx);
       ctx.hasLeftover = leftoverResult.status === 'issue';
@@ -1160,6 +1466,7 @@
       results.push(ruleElementsMatch(ctx));
       results.push(ruleEssayRatio(ctx));
       results.push(ruleRatio100(ctx));
+      results.push(...ruleAreaMaxScores(ctx));
       results.push(ruleTeachingPlanVsSchedule(ctx));
       results.push(...ruleBaseScore(ctx));
       results.push(ruleDigitalHours(ctx));
@@ -1168,11 +1475,16 @@
       results.push(ruleTemplateStructure(ctx));
 
       renderResults(results);
+
+      lastCtx = ctx;
+      aiSuggestWrap.style.display = collectAllRubricElements(ctx).length ? 'block' : 'none';
+      aiSuggestResults.innerHTML = '';
     } catch(err){
       resultsArea.innerHTML = `<div class="card issue"><div class="tab"></div><div class="card-body">
         <div class="card-top"><span class="badge">오류</span><span class="card-title">파일을 읽지 못했습니다</span></div>
         <div class="card-detail">${escapeHtml(err.message || String(err))}<br>hwpx 파일 형식이 손상되었거나, 예상한 표 구조와 다를 수 있습니다.</div>
       </div></div>`;
+      aiSuggestWrap.style.display = 'none';
     } finally {
       runBtn.disabled = false;
     }
