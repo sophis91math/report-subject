@@ -473,6 +473,45 @@
     return txt;
   }
 
+  // Build a table as a proper 2D grid using each cell's real cellAddr/cellSpan,
+  // instead of raw DOM tc order. HWPX omits the <hp:tc> entirely for any cell
+  // that's covered by a rowSpan/colSpan from an earlier cell (e.g. the "월"
+  // column is written once with rowSpan=4 and simply absent from the other 3
+  // rows) — naive positional extraction silently shifts every later column
+  // left on those rows. Filling every spanned position with the origin cell's
+  // text also means callers never need their own "carry forward the month"
+  // bookkeeping; every physical row already has the right value in every column.
+  function extractTableGrid(tbl){
+    const trs = Array.from(tbl.children).filter(c => c.tagName === 'hp:tr');
+    const cellData = [];
+    let maxRow = 0, maxCol = 0;
+    for(const tr of trs){
+      const tcs = Array.from(tr.children).filter(c => c.tagName === 'hp:tc');
+      for(const tc of tcs){
+        const addrEl = tc.getElementsByTagName('hp:cellAddr')[0];
+        const spanEl = tc.getElementsByTagName('hp:cellSpan')[0];
+        const rowAddr = addrEl ? parseInt(addrEl.getAttribute('rowAddr'), 10) || 0 : cellData.length;
+        const colAddr = addrEl ? parseInt(addrEl.getAttribute('colAddr'), 10) || 0 : 0;
+        const rowSpan = spanEl ? (parseInt(spanEl.getAttribute('rowSpan'), 10) || 1) : 1;
+        const colSpan = spanEl ? (parseInt(spanEl.getAttribute('colSpan'), 10) || 1) : 1;
+        const text = getCellText(tc);
+        cellData.push({ rowAddr, colAddr, rowSpan, colSpan, text });
+        maxRow = Math.max(maxRow, rowAddr + rowSpan);
+        maxCol = Math.max(maxCol, colAddr + colSpan);
+      }
+    }
+    if(maxRow === 0 || maxCol === 0) return [];
+    const grid = Array.from({ length: maxRow }, () => Array(maxCol).fill(''));
+    for(const cd of cellData){
+      for(let r = cd.rowAddr; r < cd.rowAddr + cd.rowSpan && r < maxRow; r++){
+        for(let c = cd.colAddr; c < cd.colAddr + cd.colSpan && c < maxCol; c++){
+          grid[r][c] = cd.text;
+        }
+      }
+    }
+    return grid;
+  }
+
   async function parseHwpx(file){
     const buf = await file.arrayBuffer();
     const zip = await JSZip.loadAsync(buf);
@@ -536,12 +575,7 @@
         } else {
           const tbls = child.getElementsByTagName('hp:tbl');
           for(const tbl of tbls){
-            const trs = Array.from(tbl.children).filter(c=>c.tagName==='hp:tr');
-            const rows = [];
-            for(const tr of trs){
-              const tcs = Array.from(tr.children).filter(c=>c.tagName==='hp:tc');
-              rows.push(tcs.map(getCellText));
-            }
+            const rows = extractTableGrid(tbl);
             tables.push(rows);
             const tableText = rows.map(r => r.join(' ')).join(' ');
             if(tableText.trim()) chunks.push({ text: tableText, location: currentLocation });
@@ -733,11 +767,37 @@
 
   function getRegionElementLabels(rows){
     const labels = [];
+    let prevC0 = null;
     for(const r of rows){
       const c0 = (r[0]||'').trim();
-      if(/\(\s*\d+\s*점\s*\)\s*$/.test(c0)) labels.push(stripParenScore(c0));
+      // a merged (rowSpan) label now repeats on every physical row it covers —
+      // only count it once, at the row where it first appears
+      if(/\(\s*\d+\s*점\s*\)\s*$/.test(c0) && c0 !== prevC0){
+        labels.push(stripParenScore(c0));
+      }
+      prevC0 = c0;
     }
     return labels;
+  }
+
+  // Find, for each performance-area name (from section 5), which column index
+  // it occupies in the "시기/영역" header row of the section-4 overview table.
+  // This replaces brittle "last K columns" position-guessing — tables vary in
+  // whether they have a trailing 합계 column, split 선택형/논술형 sub-columns,
+  // etc., so matching by the region's actual name text is far more reliable.
+  function getRegionColumnMap(ctx){
+    const perfTables = findPerformanceTables(ctx.tables);
+    const headerRow = findAreaHeaderRow(ctx.tables);
+    return perfTables.map(rows => {
+      const name = normSpace(rows[0][1] || '');
+      let colIndex = -1;
+      if(headerRow){
+        for(let i=1; i<headerRow.length; i++){
+          if(normSpace(headerRow[i]||'') === name){ colIndex = i; break; }
+        }
+      }
+      return { name, rows, colIndex };
+    });
   }
 
   function findAreaHeaderRow(tables){
@@ -759,25 +819,15 @@
     if(!headerRow){
       return {status:'warn', title:'4번-5번 표 평가 영역명 일치 여부 확인 불가', detail:'"4. 평가 계획 개요"에서 "시기/영역" 머리글 행을 찾지 못했습니다.'};
     }
-    const K = perfTables.length;
-    const cells = headerRow.slice(1).filter(c => (c||'').trim());
-    const declaredNames = cells.slice(-K).map(c => normSpace(c));
-    const detailNames = perfTables.map(rows => normSpace(rows[0][1]||''));
-
-    if(declaredNames.length !== K){
-      return {status:'warn', title:'4번-5번 표 평가 영역명 일치 여부 확인 불가', detail:`영역 수(${K})와 "시기/영역" 행의 이름 수(${declaredNames.length})가 맞지 않아 자동 대조가 어렵습니다.`};
+    const map = getRegionColumnMap(ctx);
+    const missing = map.filter(m => m.colIndex === -1);
+    if(missing.length){
+      return {
+        status:'issue', title:'"4. 평가 계획 개요"와 "5. 수행평가 세부 기준"의 평가 영역명이 다름',
+        detail: missing.map(m => `5번 표에는 있지만 4번 표 "시기/영역" 행에서 같은 문구를 찾지 못함: <span class="mono">${escapeHtml(m.name)}</span>`).join('<br>')
+      };
     }
-
-    const mismatches = [];
-    for(let i=0; i<K; i++){
-      if(declaredNames[i] !== detailNames[i]){
-        mismatches.push(`4번 표: <span class="mono">${escapeHtml(declaredNames[i])}</span> / 5번 표: <span class="mono">${escapeHtml(detailNames[i])}</span>`);
-      }
-    }
-    if(mismatches.length){
-      return {status:'issue', title:'"4. 평가 계획 개요"와 "5. 수행평가 세부 기준"의 평가 영역명이 다름', detail: mismatches.join('<br>')};
-    }
-    return {status:'ok', title:'4번-5번 표 평가 영역명 일치', detail:`모든 영역명이 일치합니다: ${detailNames.map(n=>escapeHtml(n)).join(', ')}`};
+    return {status:'ok', title:'4번-5번 표 평가 영역명 일치', detail:`모든 영역명이 일치합니다: ${map.map(m=>escapeHtml(m.name)).join(', ')}`};
   }
 
   function findOverviewElementsRow(tables){
@@ -801,28 +851,24 @@
     if(!overviewRow){
       return {status:'warn', title:'평가요소 일치 여부 확인 불가', detail:'"4. 평가 계획 개요"에서 평가요소가 나열된 행을 찾지 못했습니다.'};
     }
-
-    const groups = overviewRow.slice(1).filter(c => (c||'').includes('∘'));
-    const K = perfTables.length;
-    const perfGroups = groups.slice(-K);
-
-    if(perfGroups.length !== K){
-      return {status:'warn', title:'평가요소 일치 여부 확인 불가', detail:`영역 수(${K})와 "4. 평가 계획 개요"의 평가요소 그룹 수(${perfGroups.length})가 맞지 않아 자동 대조가 어렵습니다.`};
+    const map = getRegionColumnMap(ctx);
+    if(map.some(m => m.colIndex === -1)){
+      return {status:'warn', title:'평가요소 일치 여부 확인 불가', detail:'"4. 평가 계획 개요"의 "시기/영역" 행에서 일부 영역명을 찾지 못해 열을 특정하지 못했습니다.'};
     }
 
     const mismatches = [];
-    perfTables.forEach((rows, idx) => {
-      const name = (rows[0][1]||'').trim() || `영역${idx+1}`;
-      const detailLabels = new Set(getRegionElementLabels(rows));
+    for(const m of map){
+      const cell = overviewRow[m.colIndex] || '';
+      const detailLabels = new Set(getRegionElementLabels(m.rows));
       const overviewLabels = new Set(
-        perfGroups[idx].split('∘').map(s => stripParenScore(s.replace(/^[\s/]+|[\s/]+$/g,''))).filter(Boolean)
+        cell.split('∘').map(s => stripParenScore(s.replace(/^[\s/]+|[\s/]+$/g,''))).filter(Boolean)
       );
       const onlyInOverview = [...overviewLabels].filter(x => !detailLabels.has(x));
       const onlyInDetail = [...detailLabels].filter(x => !overviewLabels.has(x));
       if(onlyInOverview.length || onlyInDetail.length){
-        mismatches.push({name, onlyInOverview, onlyInDetail});
+        mismatches.push({ name: m.name, onlyInOverview, onlyInDetail });
       }
-    });
+    }
 
     if(mismatches.length === 0){
       return {status:'ok', title:'"4.평가계획개요" ↔ "5.수행평가 세부기준" 평가요소 문구 일치', detail:'모든 영역에서 평가요소 문구가 정확히 일치합니다.'};
@@ -920,12 +966,24 @@
     return {status:'ok', title:'서술형(논술형) 평가 비율', detail:`${declaredTotal}%로 편성되어 기준(${threshold}% 이상)을 충족합니다.`};
   }
 
+  // Collapse consecutive duplicate cells produced by a colSpan merge (e.g. a
+  // "70%" cell spanning 4 sub-columns now appears 4 times in a row after grid
+  // extraction) back down to one, so summing a row's values doesn't
+  // accidentally count a single merged figure multiple times.
+  function collapseRow(row){
+    const out = [];
+    for(const cell of row){
+      if(out.length === 0 || out[out.length-1] !== cell) out.push(cell);
+    }
+    return out;
+  }
+
   function ruleRatio100(ctx){
     const row = findRatioRow(ctx.tables);
     if(!row){
       return {status:'warn', title:'반영비율 합계 확인 불가', detail:"'정기시험/수행평가' 반영비율 행을 찾지 못했습니다."};
     }
-    const values = row.slice(1).map(firstPercent).filter(v => v !== null);
+    const values = collapseRow(row.slice(1)).map(firstPercent).filter(v => v !== null);
     if(values.length === 0){
       return {status:'warn', title:'반영비율 합계 확인 불가', detail:'퍼센트 값을 해석하지 못했습니다.'};
     }
@@ -972,7 +1030,7 @@
   function getPerformancePercentFromRatioRow(ctx){
     const row = findRatioRow(ctx.tables);
     if(!row) return null;
-    const values = row.slice(1).map(firstPercent).filter(v => v !== null);
+    const values = collapseRow(row.slice(1)).map(firstPercent).filter(v => v !== null);
     if(values.length < 2) return null;
     // layout is [...정기시험 columns..., 수행평가%, 합계%] — second-to-last is 수행평가
     return values[values.length - 2];
@@ -1014,9 +1072,11 @@
       items.push({status:'ok', title:'영역 만점 합계', detail:`영역별 만점의 합(${sumAreaMax}점)이 수행평가 반영비율(${perfPercent}%)과 일치합니다.`});
     }
 
-    // (b) per-area 점수(%) 표기 일치 — only check the 수행평가 columns of the combined
-    // overview row (last K groups, K = number of 수행평가 영역), since 정기시험 columns use
-    // a raw exam score that is NOT expected to equal its %.
+    // (b) per-area 점수(%) 표기 일치 — use the same name-matched column map as
+    // the other cross-checks, instead of assuming the 수행평가 columns are the
+    // last K cells of the row (a trailing 합계 column, or 선택형/논술형 split
+    // sub-columns for 정기시험, both break that assumption).
+    const map = getRegionColumnMap(ctx);
     let targetRow = null;
     for(const rows of ctx.tables){
       for(const row of rows){
@@ -1024,21 +1084,21 @@
       }
       if(targetRow) break;
     }
-    if(targetRow){
-      const rowText = targetRow.slice(1).join(' ');
-      const pairRe = /(\d+(?:\.\d+)?)\s*점\s*\(\s*(\d+(?:\.\d+)?)\s*%\s*\)/g;
-      const pairs = [];
-      let m;
-      while((m = pairRe.exec(rowText))) pairs.push({ score: parseFloat(m[1]), percent: parseFloat(m[2]) });
-      const K = perfTables.length;
-      const perfPairs = pairs.slice(-K);
+    if(targetRow && map.length && !map.some(m => m.colIndex === -1)){
+      const pairRe = /(\d+(?:\.\d+)?)\s*점\s*\(\s*(\d+(?:\.\d+)?)\s*%\s*\)/;
+      const perfPairs = [];
+      for(const m of map){
+        const cell = targetRow[m.colIndex] || '';
+        const pm = cell.match(pairRe);
+        if(pm) perfPairs.push({ name: m.name, score: parseFloat(pm[1]), percent: parseFloat(pm[2]) });
+      }
 
-      if(perfPairs.length === K && K > 0){
+      if(perfPairs.length === map.length){
         const mismatched = perfPairs.filter(p => Math.abs(p.score - p.percent) > 0.001);
         if(mismatched.length){
           items.push({
             status:'issue', title:'수행평가 영역의 만점(점)과 반영비율(%) 수치 불일치',
-            detail: mismatched.map(p=>`${p.score}점(${p.percent}%)`).join(', ') + ' — 예: "30점(30%)"처럼 점수와 비율(%) 숫자가 같아야 합니다.'
+            detail: mismatched.map(p=>`[${escapeHtml(p.name)}] ${p.score}점(${p.percent}%)`).join(', ') + ' — 예: "30점(30%)"처럼 점수와 비율(%) 숫자가 같아야 합니다.'
           });
         } else {
           items.push({status:'ok', title:'수행평가 영역 만점 ↔ 반영비율(%) 수치 일치', detail:'모든 수행평가 영역에서 점수와 비율(%) 숫자가 일치합니다.'});
@@ -1245,21 +1305,21 @@ ${JSON.stringify(payload, null, 0)}`;
     const foundSet = new Set(foundWeeks);
 
     // 2. gather declared "평가 시기" values from the evaluation-overview table —
-    // only the LAST K cells of that row, where K = number of 수행평가 영역 (performance
-    // tables). Earlier cells in that row are 정기시험(1차/2차) dates, which are a
-    // different thing and must not be compared against ★수행평가 markers.
-    const perfTables = findPerformanceTables(ctx.tables);
-    const K = perfTables.length;
+    // only the columns whose "시기/영역" header matches an actual 수행평가 영역
+    // name (found via getRegionColumnMap). This replaces a fixed "last K
+    // columns" guess, which breaks on tables that also carry a trailing 합계
+    // column or split 선택형/논술형 sub-columns for the written exam.
+    const map = getRegionColumnMap(ctx);
     const declared = [];
-    for(const rows of ctx.tables){
-      for(const row of rows){
-        const c0 = (row[0]||'');
-        if(c0.includes('평가 시기')){
-          const cells = row.slice(1);
-          const perfCells = K > 0 ? cells.slice(-K) : cells;
-          for(const cell of perfCells){
-            const m = (cell||'').match(/(\d+)\s*월\s*(\d+)\s*주/g);
-            if(m) declared.push(...m.map(x => x.replace(/\s+/g,'')));
+    if(map.length && !map.some(m => m.colIndex === -1)){
+      for(const rows of ctx.tables){
+        for(const row of rows){
+          if((row[0]||'').includes('평가 시기')){
+            for(const m of map){
+              const cell = row[m.colIndex] || '';
+              const found = cell.match(/(\d+)\s*월\s*(\d+)\s*주/g);
+              if(found) declared.push(...found.map(x => x.replace(/\s+/g,'')));
+            }
           }
         }
       }
