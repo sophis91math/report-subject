@@ -415,7 +415,7 @@
       const content = await page.getTextContent();
       text += content.items.map(it => it.str).join(' ') + '\n';
     }
-    return text;
+    return text.normalize('NFC');
   }
 
   // ---------- HWPX PARSING ----------
@@ -465,7 +465,7 @@
       }
     }
 
-    const fullText = fullTextParts.join(' ');
+    const fullText = fullTextParts.join(' ').normalize('NFC');
     return { paragraphs, tables, fullText };
   }
 
@@ -528,7 +528,10 @@
   }
 
   function extractCodes(text){
-    const re = /\[9[가-힣]\s*[0-9]{2}\s*-\s*[0-9]{2}\]/g;
+    // Tolerant of whitespace/line-breaks between any character inside the brackets
+    // (hwpx often puts the code on its own line, PDFs sometimes emit each glyph
+    // as a separate text item) — normalize away all internal whitespace either way.
+    const re = /\[\s*9\s*[가-힣]\s*[0-9]\s*[0-9]\s*-\s*[0-9]\s*[0-9]\s*\]/g;
     const raw = text.match(re) || [];
     const spaced = raw.filter(c => /\s/.test(c));
     const normalized = raw.map(c => c.replace(/\s+/g,''));
@@ -977,7 +980,7 @@
       const content = await page.getTextContent();
       text += content.items.map(it => it.str).join(' ') + '\n';
     }
-    return text;
+    return text.normalize('NFC');
   }
 
   async function runReview(){
