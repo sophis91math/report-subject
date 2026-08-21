@@ -279,7 +279,7 @@
           <option value="2022">1·2학년 — 2022 개정 교육과정</option>
           <option value="2015">3학년 — 2015 개정 교육과정</option>
         </select>
-        <div class="hint">3학년 선택 시 성취기준 코드 형식이 다를 수 있어, 코드 검증 결과를 참고용으로만 표시합니다.</div>
+        <div class="hint">선택한 학년에 맞는 공식 양식 파일(레포지토리에 함께 올려둔 PDF)을 자동으로 불러와 구조를 대조합니다.</div>
 
         <div class="field-label"><span class="num">4</span>해당 교과 성취기준 파일 (.pdf)</div>
         <div class="drop" id="stdDropZone">
@@ -508,7 +508,6 @@
     '전 교과 공통 사항',
     '필요하다면 줄 추가 후 작성',
     '1학기 내용 일부 수정됨',
-    '생각의 힘을 나누는 학년',
     '교과별로 기록(예:',
     '<참고> 교과별 교육과정 및 성취수준',
     '평가요소는 “~하기”로 표현할 것',
@@ -772,6 +771,51 @@
     return {status:'ok', title:'디지털 기반 수업 시수 합계', detail:`"★디지털 기반 수업(N)" 표기 ${count}건의 합(${total}시간)이 "2학기 디지털 기반 수업 시수"(${stated})와 일치합니다.${caveat}`};
   }
 
+  function ruleThinkingPhrase(ctx){
+    const found = ctx.fullText.includes('생각의 힘을 나누는 학년');
+    if(!found) return {status:'ok', title:"'생각의 힘을 나누는 학년' 문구", detail:'해당 문구가 없습니다 — 이상 없음.'};
+    if(ctx.grade === '2022'){
+      return {status:'issue', title:"'생각의 힘을 나누는 학년' 문구가 삭제되지 않음",
+        detail:"1·2학년 양식 안내에 따르면 이 문구는 삭제 대상입니다(양식 메모: '1,2학년 생각의~ 내용 삭제')."};
+    }
+    return {status:'issue', title:"3학년 양식에 없는 '생각의 힘을 나누는 학년' 문구가 있음",
+      detail:'3학년(2015 개정) 양식에는 이 항목 자체가 존재하지 않습니다. 1·2학년 양식 문구가 잘못 섞여 들어갔을 수 있습니다.'};
+  }
+
+  function detectSection3Style(text){
+    const hasStandard = text.includes('성취기준 및 성취수준');
+    const hasCriteria = text.includes('성취기준 및 평가기준');
+    if(hasStandard && !hasCriteria) return {key:'성취수준', label:'성취기준 및 성취수준 (등급형 성취수준: A/B/C 등)'};
+    if(hasCriteria && !hasStandard) return {key:'평가기준', label:'성취기준 및 평가기준 (상/중/하 평가기준)'};
+    if(hasStandard && hasCriteria) return {key:'both', label:'두 형식이 모두 발견됨'};
+    return null;
+  }
+
+  function ruleTemplateStructure(ctx){
+    if(!ctx.templateFullText){
+      return {status:'warn', title:'양식 파일 대조 생략됨', detail: ctx.templateError
+        ? `선택한 학년의 양식 PDF를 불러오지 못했습니다 (${escapeHtml(ctx.templateError)}). 저장소에 해당 파일이 함께 올라가 있는지 확인하세요.`
+        : '선택한 학년의 양식 PDF를 불러오지 못했습니다.'};
+    }
+    const templateStyle = detectSection3Style(ctx.templateFullText);
+    const planStyle = detectSection3Style(ctx.fullText);
+    const gradeLabel = ctx.grade === '2022' ? '1·2학년(2022 개정)' : '3학년(2015 개정)';
+
+    if(!planStyle){
+      return {status:'warn', title:"'3. 성취기준 및 ○○' 항목 형식 확인 불가", detail:'계획서에서 "성취기준 및 성취수준" 또는 "성취기준 및 평가기준" 문구를 찾지 못했습니다.'};
+    }
+    if(!templateStyle || templateStyle.key === 'both'){
+      return {status:'warn', title:"양식 형식 자동 판별 불가", detail:'불러온 양식 PDF에서 형식을 판별하지 못했습니다.'};
+    }
+    if(planStyle.key !== templateStyle.key && planStyle.key !== 'both'){
+      return {
+        status:'issue', title:`선택한 학년(${gradeLabel}) 양식과 다른 성취기준 표기 형식 사용`,
+        detail:`계획서는 "${planStyle.label}" 형식을 사용했지만, ${gradeLabel} 양식은 "${templateStyle.label}" 형식입니다.`
+      };
+    }
+    return {status:'ok', title:'성취기준 표기 형식', detail:`계획서가 ${gradeLabel} 양식의 형식("${templateStyle.label}")과 일치합니다.`};
+  }
+
   function ruleSection8(ctx){
     const idx = ctx.paragraphs.findIndex(p => p.includes('수행평가 유의사항'));
     if(idx === -1) return {status:'warn', title:"'8. 수행평가 유의사항' 항목 확인 불가", detail:'해당 항목을 찾지 못했습니다.'};
@@ -788,6 +832,26 @@
   }
 
   // ---------- RUN ----------
+  const TEMPLATE_PATHS = {
+    '2022': './template-1-2.pdf',
+    '2015': './template-3.pdf'
+  };
+
+  async function fetchTemplateText(grade){
+    const path = TEMPLATE_PATHS[grade];
+    const res = await fetch(path);
+    if(!res.ok) throw new Error(`${path} (HTTP ${res.status})`);
+    const buf = await res.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let text = '';
+    for(let i=1; i<=pdf.numPages; i++){
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(it => it.str).join(' ') + '\n';
+    }
+    return text;
+  }
+
   async function runReview(){
     runBtn.disabled = true;
     resultsArea.innerHTML = `<div class="loading-row"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;계획서를 읽는 중입니다…</div>`;
@@ -813,7 +877,17 @@
       }
 
       const threshold = parseInt(document.querySelector('input[name="subjectType"]:checked').value, 10);
-      const ctx = { paragraphs, tables, fullText, threshold, stdInput, hasLeftover:false };
+      const grade = document.getElementById('gradeSelect').value;
+
+      let templateFullText = null, templateError = null;
+      resultsArea.innerHTML = `<div class="loading-row"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;선택한 학년의 양식 파일을 불러오는 중입니다…</div>`;
+      try{
+        templateFullText = await fetchTemplateText(grade);
+      } catch(tplErr){
+        templateError = tplErr.message || String(tplErr);
+      }
+
+      const ctx = { paragraphs, tables, fullText, threshold, stdInput, grade, templateFullText, templateError, hasLeftover:false };
 
       const leftoverResult = ruleLeftoverMarkers(ctx);
       ctx.hasLeftover = leftoverResult.status === 'issue';
@@ -827,6 +901,8 @@
       results.push(ruleRatio100(ctx));
       results.push(...ruleBaseScore(ctx));
       results.push(ruleDigitalHours(ctx));
+      results.push(ruleThinkingPhrase(ctx));
+      results.push(ruleTemplateStructure(ctx));
       results.push(ruleSection8(ctx));
 
       renderResults(results);
