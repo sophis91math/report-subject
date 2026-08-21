@@ -697,6 +697,27 @@
     return tables.filter(rows => rows.length && rows[0][0] && rows[0][0].trim() === '평가 영역명');
   }
 
+  // Collapse consecutive duplicate cells produced by a colSpan merge (e.g. a
+  // "70%" cell spanning 4 sub-columns now appears 4 times in a row after grid
+  // extraction) back down to one, so summing a row's values doesn't
+  // accidentally count a single merged figure multiple times.
+  function collapseRow(row){
+    const out = [];
+    for(const cell of row){
+      if(out.length === 0 || out[out.length-1] !== cell) out.push(cell);
+    }
+    return out;
+  }
+
+  // The "평가 영역명" label cell itself is sometimes colSpan-merged across 2
+  // columns, which would otherwise make a naive rows[0][1] read the label
+  // ("평가 영역명") again instead of the actual area name one column later.
+  // Collapsing consecutive duplicates first before indexing fixes that.
+  function getAreaName(rows){
+    const collapsed = collapseRow((rows && rows[0]) || []);
+    return normSpace(collapsed[1] || '');
+  }
+
   function ruleAreaNames(ctx){
     const perfTables = findPerformanceTables(ctx.tables);
     if(perfTables.length === 0){
@@ -706,7 +727,7 @@
     const bad = [];
     const good = [];
     for(const rows of perfTables){
-      const name = (rows[0][1]||'').trim();
+      const name = getAreaName(rows);
       if(!name) continue;
       if(/기$/.test(name)) good.push(name);
       else bad.push(name);
@@ -728,7 +749,7 @@
     if(perfTables.length === 0) return [];
     const items = [];
     for(const rows of perfTables){
-      const name = (rows[0][1]||'').trim() || '(이름 미확인)';
+      const name = getAreaName(rows) || '(이름 미확인)';
       const allText = rows.map(r=>r.join(' | ')).join(' \n ');
       const codeSet = extractCodes(allText).set;
       // count 평가요소 rows: col0 matches pattern ending with (숫자점)
@@ -789,7 +810,7 @@
     const perfTables = findPerformanceTables(ctx.tables);
     const headerRow = findAreaHeaderRow(ctx.tables);
     return perfTables.map(rows => {
-      const name = normSpace(rows[0][1] || '');
+      const name = getAreaName(rows);
       let colIndex = -1;
       if(headerRow){
         for(let i=1; i<headerRow.length; i++){
@@ -895,7 +916,7 @@
     if(perfTables.length === 0) return [];
     const items = [];
     for(const rows of perfTables){
-      const name = (rows[0][1]||'').trim() || '(이름 미확인)';
+      const name = getAreaName(rows) || '(이름 미확인)';
       // area max score: header row, find '영역만점' then next cell
       let areaMax = null;
       const header = rows[0];
@@ -966,17 +987,6 @@
     return {status:'ok', title:'서술형(논술형) 평가 비율', detail:`${declaredTotal}%로 편성되어 기준(${threshold}% 이상)을 충족합니다.`};
   }
 
-  // Collapse consecutive duplicate cells produced by a colSpan merge (e.g. a
-  // "70%" cell spanning 4 sub-columns now appears 4 times in a row after grid
-  // extraction) back down to one, so summing a row's values doesn't
-  // accidentally count a single merged figure multiple times.
-  function collapseRow(row){
-    const out = [];
-    for(const cell of row){
-      if(out.length === 0 || out[out.length-1] !== cell) out.push(cell);
-    }
-    return out;
-  }
 
   function ruleRatio100(ctx){
     const row = findRatioRow(ctx.tables);
@@ -1111,7 +1121,7 @@
 
   // ---------- AI rubric-wording suggestions (opt-in, calls the Claude API) ----------
   function extractAreaContext(rows){
-    const areaName = (rows[0][1]||'').trim() || '(이름 미확인)';
+    const areaName = getAreaName(rows) || '(이름 미확인)';
     let achievementText = '';
     const levels = [];
     let sawStandardLabel = false;
@@ -1136,7 +1146,7 @@
   }
 
   function extractRubricElements(rows){
-    const areaName = (rows[0][1]||'').trim() || '(이름 미확인)';
+    const areaName = getAreaName(rows) || '(이름 미확인)';
     const elements = [];
     let current = null;
     for(const r of rows){
@@ -1491,45 +1501,11 @@ ${JSON.stringify(payload, null, 0)}`;
     }
 
     // (글자 중복 검사 제외됨)
-
-    // 4) immediately repeated word (예: "계획을을", "학생 학생")
-    const repeatHits = [];
-    const seenRepeat = new Set();
-    for(const chunk of chunks){
-      const re = /([가-힣A-Za-z0-9]{2,})\s+\1(?![가-힣A-Za-z0-9])/g;
-      let rm;
-      while((rm = re.exec(chunk.text))){
-        const key = rm[1] + '|' + chunk.location;
-        if(seenRepeat.has(key)) continue;
-        seenRepeat.add(key);
-        repeatHits.push({ word: rm[1], location: chunk.location });
-      }
-    }
-    if(repeatHits.length){
-      items.push({
-        status:'warn', title:'같은 단어가 연달아 반복됨',
-        detail: repeatHits.map(h=>`<span class="mono">${escapeHtml(h.word)} ${escapeHtml(h.word)}</span>${locTag(h.location)}`).join('<br>') + '<br>오타이거나 삭제되지 않은 중복일 수 있습니다.'
-      });
-    }
-
-    // 5) bracket / parenthesis balance — document-wide, no single location to point to
-    const text = ctx.fullText;
-    const pairs = [['(',')'],['[',']'],['{','}'],['「','」'],['《','》'],['〈','〉']];
-    const unbalanced = [];
-    for(const [open, close] of pairs){
-      const openCount = (text.match(new RegExp('\\'+open,'g'))||[]).length;
-      const closeCount = (text.match(new RegExp('\\'+close,'g'))||[]).length;
-      if(openCount !== closeCount) unbalanced.push(`${open}${close} — 여는 괄호 ${openCount}개 / 닫는 괄호 ${closeCount}개`);
-    }
-    if(unbalanced.length){
-      items.push({
-        status:'warn', title:'괄호 짝이 맞지 않음',
-        detail: unbalanced.join('<br>') + '<br>정확한 위치는 직접 확인이 필요합니다.'
-      });
-    }
+    // (단어 연속 반복 검사 제외됨)
+    // (괄호 짝 검사 제외됨)
 
     if(items.length === 0){
-      items.push({status:'ok', title:'오타 점검', detail:'흔한 맞춤법 오류, 조사 오류, 글자 중복, 단어 반복, 괄호 짝 불일치가 발견되지 않았습니다.'});
+      items.push({status:'ok', title:'오타 점검', detail:'흔한 맞춤법 오류, 조사 오류가 발견되지 않았습니다.'});
     }
     return items;
   }
