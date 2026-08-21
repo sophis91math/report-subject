@@ -455,6 +455,24 @@
   }
 
   // ---------- HWPX PARSING ----------
+  // Sum text of hp:t descendants under `root`, but skip anything that lives
+  // inside an hp:memo (a native HWPX comment bubble) — reviewer/teacher notes
+  // added as comments are not part of the document body and shouldn't be
+  // scanned as if they were actual plan content.
+  function collectText(root){
+    let txt = '';
+    const ts = root.getElementsByTagName('hp:t');
+    for(const t of ts){
+      let p = t.parentElement, inMemo = false;
+      while(p && p !== root){
+        if(p.tagName === 'hp:memo'){ inMemo = true; break; }
+        p = p.parentElement;
+      }
+      if(!inMemo) txt += (t.textContent || '');
+    }
+    return txt;
+  }
+
   async function parseHwpx(file){
     const buf = await file.arrayBuffer();
     const zip = await JSZip.loadAsync(buf);
@@ -508,9 +526,7 @@
         const hasTbl = child.getElementsByTagName('hp:tbl').length > 0;
 
         if(!hasTbl){
-          const ts = child.getElementsByTagName('hp:t');
-          let txt = '';
-          for(const t of ts) txt += (t.textContent || '');
+          const txt = collectText(child);
           if(txt.trim()){
             paragraphs.push(txt);
             const marker = detectMarker(txt);
@@ -552,10 +568,7 @@
     const paras = subList.getElementsByTagName('hp:p');
     let texts = [];
     for(const p of paras){
-      const ts = p.getElementsByTagName('hp:t');
-      let ptxt = '';
-      for(const t of ts) ptxt += (t.textContent || '');
-      texts.push(ptxt);
+      texts.push(collectText(p));
     }
     return texts.join(' ').trim();
   }
@@ -710,8 +723,12 @@
     return items;
   }
 
+  function normSpace(s){
+    return String(s).replace(/\s+/g, ' ').trim();
+  }
+
   function stripParenScore(s){
-    return s.replace(/\(\s*\d+\s*점\s*\)/g, '').trim();
+    return normSpace(s.replace(/\(\s*\d+\s*점\s*\)/g, ''));
   }
 
   function getRegionElementLabels(rows){
@@ -721,6 +738,46 @@
       if(/\(\s*\d+\s*점\s*\)\s*$/.test(c0)) labels.push(stripParenScore(c0));
     }
     return labels;
+  }
+
+  function findAreaHeaderRow(tables){
+    for(const rows of tables){
+      for(const row of rows){
+        const c0 = (row[0]||'').trim();
+        if(c0 === '시기/영역' || c0.includes('시기/영역')) return row;
+      }
+    }
+    return null;
+  }
+
+  function ruleAreaNameMatch4v5(ctx){
+    const perfTables = findPerformanceTables(ctx.tables);
+    if(perfTables.length === 0){
+      return {status:'warn', title:'4번-5번 표 평가 영역명 일치 여부 확인 불가', detail:"'평가 영역명' 표를 찾지 못했습니다."};
+    }
+    const headerRow = findAreaHeaderRow(ctx.tables);
+    if(!headerRow){
+      return {status:'warn', title:'4번-5번 표 평가 영역명 일치 여부 확인 불가', detail:'"4. 평가 계획 개요"에서 "시기/영역" 머리글 행을 찾지 못했습니다.'};
+    }
+    const K = perfTables.length;
+    const cells = headerRow.slice(1).filter(c => (c||'').trim());
+    const declaredNames = cells.slice(-K).map(c => normSpace(c));
+    const detailNames = perfTables.map(rows => normSpace(rows[0][1]||''));
+
+    if(declaredNames.length !== K){
+      return {status:'warn', title:'4번-5번 표 평가 영역명 일치 여부 확인 불가', detail:`영역 수(${K})와 "시기/영역" 행의 이름 수(${declaredNames.length})가 맞지 않아 자동 대조가 어렵습니다.`};
+    }
+
+    const mismatches = [];
+    for(let i=0; i<K; i++){
+      if(declaredNames[i] !== detailNames[i]){
+        mismatches.push(`4번 표: <span class="mono">${escapeHtml(declaredNames[i])}</span> / 5번 표: <span class="mono">${escapeHtml(detailNames[i])}</span>`);
+      }
+    }
+    if(mismatches.length){
+      return {status:'issue', title:'"4. 평가 계획 개요"와 "5. 수행평가 세부 기준"의 평가 영역명이 다름', detail: mismatches.join('<br>')};
+    }
+    return {status:'ok', title:'4번-5번 표 평가 영역명 일치', detail:`모든 영역명이 일치합니다: ${detailNames.map(n=>escapeHtml(n)).join(', ')}`};
   }
 
   function findOverviewElementsRow(tables){
@@ -1227,10 +1284,18 @@ ${JSON.stringify(payload, null, 0)}`;
   }
 
   function ruleDigitalHours(ctx){
-    // sum every "디지털 기반 수업(N)" occurrence in the body
+    // Strip the known template guide-example sentence before counting — it
+    // literally repeats "★디지털 기반 수업(N)" as an example, right next to
+    // the real entry, which would otherwise get double-counted whenever a
+    // teacher forgets to delete it.
+    const exampleRe = /해당\s*주에\s*\d+\s*시간\s*했을\s*경우\s*-?>?\s*★?\s*디지털\s*기반\s*수업\s*\(\s*\d+\s*\)/g;
+    const strippedCount = (ctx.fullText.match(exampleRe) || []).length;
+    const cleanedText = ctx.fullText.replace(exampleRe, '');
+
+    // sum every remaining "디지털 기반 수업(N)" occurrence in the body
     const re = /디지털\s*기반\s*수업\s*\(\s*(\d+)\s*\)/g;
     let total = 0, count = 0, m;
-    while((m = re.exec(ctx.fullText))){ total += parseInt(m[1], 10); count++; }
+    while((m = re.exec(cleanedText))){ total += parseInt(m[1], 10); count++; }
 
     // find the declared total, e.g. "26/62" or "15/34" next to the summary label
     let stated = null;
@@ -1255,17 +1320,20 @@ ${JSON.stringify(payload, null, 0)}`;
       return {status:'warn', title:'디지털 기반 수업 시수 합계 확인 불가', detail:`"디지털 기반 수업(N)" 표기 ${count}건의 합은 ${total}시간이지만, 표에서 "2학기 디지털 기반 수업 시수" 값을 찾지 못해 대조하지 못했습니다.`};
     }
 
-    const caveat = ctx.hasLeftover
-      ? '<br><span class="mono">주의</span>: 양식 안내문구가 삭제되지 않은 곳이 있어, 안내문 속 예시("예) 해당 주에 2시간 했을 경우-&gt; ★디지털 기반 수업(2)" 등)가 실제 표기와 함께 집계되어 합계가 실제보다 크게 나올 수 있습니다. 안내문구를 삭제한 뒤 다시 확인하세요.'
+    const strippedNote = strippedCount > 0
+      ? `<br>(안내문구 속 예시 "해당 주에 N시간 했을 경우→ ★디지털 기반 수업(N)" ${strippedCount}건은 집계에서 제외했습니다. 그래도 실제 안내문구 자체는 삭제하는 것이 좋습니다.)`
+      : '';
+    const caveat = (ctx.hasLeftover && strippedCount === 0)
+      ? '<br><span class="mono">주의</span>: 양식 안내문구가 삭제되지 않은 곳이 있어, 다른 형태의 예시 문구가 실제 표기와 함께 집계되어 합계가 실제보다 크게 나올 수 있습니다. 안내문구를 삭제한 뒤 다시 확인하세요.'
       : '';
 
     if(total !== stated){
       return {
         status:'issue', title:'디지털 기반 수업 시수 합계 불일치',
-        detail:`"★디지털 기반 수업(N)" 표기 ${count}건의 합은 ${total}시간이지만, "2학기 디지털 기반 수업 시수"에는 ${stated}(으)로 적혀 있습니다.${caveat}`
+        detail:`"★디지털 기반 수업(N)" 표기 ${count}건의 합은 ${total}시간이지만, "2학기 디지털 기반 수업 시수"에는 ${stated}(으)로 적혀 있습니다.${caveat}${strippedNote}`
       };
     }
-    return {status:'ok', title:'디지털 기반 수업 시수 합계', detail:`"★디지털 기반 수업(N)" 표기 ${count}건의 합(${total}시간)이 "2학기 디지털 기반 수업 시수"(${stated})와 일치합니다.${caveat}`};
+    return {status:'ok', title:'디지털 기반 수업 시수 합계', detail:`"★디지털 기반 수업(N)" 표기 ${count}건의 합(${total}시간)이 "2학기 디지털 기반 수업 시수"(${stated})와 일치합니다.${strippedNote}`};
   }
 
   function escapeRegex(s){
@@ -1362,17 +1430,7 @@ ${JSON.stringify(payload, null, 0)}`;
       });
     }
 
-    // 3) doubled syllable inside a word (예: "이야기기", "제출출")
-    const doubledHits = [];
-    for(const chunk of chunks){
-      for(const w of findDoubledSyllables(chunk.text)) doubledHits.push({ word: w, location: chunk.location });
-    }
-    if(doubledHits.length){
-      items.push({
-        status:'issue', title:'글자가 중복 입력된 것으로 보이는 표현',
-        detail: doubledHits.map(h=>`<span class="mono">${escapeHtml(h.word)}</span>${locTag(h.location)}`).join('<br>')
-      });
-    }
+    // (글자 중복 검사 제외됨)
 
     // 4) immediately repeated word (예: "계획을을", "학생 학생")
     const repeatHits = [];
@@ -1541,15 +1599,16 @@ ${JSON.stringify(payload, null, 0)}`;
       results.push(leftoverResult);
       results.push(...ruleCodes(ctx));
       results.push(...ruleAreaNames(ctx));
-      results.push(ruleElementsMatch(ctx));
       results.push(ruleEssayRatio(ctx));
       results.push(ruleRatio100(ctx));
       results.push(...ruleAreaMaxScores(ctx));
-      results.push(ruleTeachingPlanVsSchedule(ctx));
+      results.push(ruleAreaNameMatch4v5(ctx));
       results.push(...ruleBaseScore(ctx));
       results.push(ruleDigitalHours(ctx));
-      results.push(ruleThinkingPhrase(ctx));
+      results.push(ruleTeachingPlanVsSchedule(ctx));
       results.push(...ruleTypos(ctx));
+      results.push(ruleElementsMatch(ctx));
+      results.push(ruleThinkingPhrase(ctx));
       results.push(ruleTemplateStructure(ctx));
 
       renderResults(results);
