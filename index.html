@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>검토관 — 교수·학습 및 평가운영계획서 검토</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700;900&family=Noto+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{
+    --paper:#F5F1E8;
+    --paper-deep:#EDE7D8;
+    --line:#D9D2BE;
+    --line-strong:#C7BEA4;
+    --ink:#221F19;
+    --ink-soft:#5A5346;
+    --ink-faint:#8B8371;
+    --red:#B8341F;
+    --red-deep:#8E2717;
+    --red-soft:#F3DDD3;
+    --red-wash:#FBEEE8;
+    --blue:#28425E;
+    --blue-soft:#DCE4E9;
+    --blue-wash:#EFF3F5;
+    --gold:#A9812F;
+    --shadow: 0 1px 0 rgba(34,31,25,.06), 0 8px 24px -12px rgba(34,31,25,.25);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      linear-gradient(var(--line) 1px, transparent 1px) 0 0/100% 34px,
+      linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/34px 100%,
+      var(--paper);
+    background-attachment: fixed;
+    color:var(--ink);
+    font-family:"Noto Sans KR", sans-serif;
+    min-height:100vh;
+    padding: 40px 20px 80px;
+  }
+  body::before{
+    content:"";
+    position:fixed; inset:0; pointer-events:none; z-index:0;
+    background-image: radial-gradient(rgba(0,0,0,.025) 1px, transparent 1px);
+    background-size: 3px 3px;
+    opacity:.5;
+  }
+  .wrap{max-width:1180px;margin:0 auto;position:relative;z-index:1;}
+
+  /* ===== Header ===== */
+  header{
+    display:flex; align-items:flex-end; justify-content:space-between;
+    border-bottom: 3px double var(--ink);
+    padding-bottom:18px; margin-bottom:34px;
+    gap: 24px; flex-wrap:wrap;
+  }
+  .title-block .eyebrow{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:11px; letter-spacing:.24em; color:var(--red-deep);
+    text-transform:uppercase; margin-bottom:8px; font-weight:600;
+  }
+  h1{
+    font-family:"Noto Serif KR", serif; font-weight:900;
+    font-size:clamp(30px,4vw,44px); margin:0; letter-spacing:-.01em;
+    color:var(--ink);
+  }
+  .title-block p{
+    margin:8px 0 0; color:var(--ink-soft); font-size:14.5px; max-width:520px; line-height:1.6;
+  }
+  .stamp-static{
+    width:88px;height:88px;flex:none;position:relative;
+    display:flex; align-items:center; justify-content:center;
+    transform:rotate(-9deg);
+    opacity:.9;
+  }
+  .stamp-static svg{width:100%;height:100%;display:block;}
+
+  /* ===== Layout ===== */
+  .grid{display:grid; grid-template-columns: 400px 1fr; gap:28px;}
+  @media (max-width:920px){ .grid{grid-template-columns:1fr;} }
+
+  .sheet{
+    background: linear-gradient(180deg, #FBF9F3, #F7F3E9);
+    border:1px solid var(--line-strong);
+    box-shadow:var(--shadow);
+    position:relative;
+  }
+  .sheet::before{
+    content:""; position:absolute; left:0; top:0; bottom:0; width:6px;
+    background: repeating-linear-gradient(180deg, var(--red) 0 2px, transparent 2px 10px);
+    opacity:.55;
+  }
+  .sheet-inner{padding:26px 26px 26px 30px;}
+
+  .field-label{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:11.5px; font-weight:600; letter-spacing:.08em;
+    color:var(--ink-soft); text-transform:uppercase;
+    display:flex; align-items:center; gap:8px; margin: 22px 0 8px;
+  }
+  .field-label:first-child{margin-top:0;}
+  .field-label .num{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:18px;height:18px; border:1px solid var(--ink-soft); border-radius:50%;
+    font-size:10px; color:var(--ink-soft);
+  }
+
+  /* file drop */
+  .drop{
+    border:1.5px dashed var(--line-strong);
+    background: var(--paper-deep);
+    padding:22px 16px; text-align:center; cursor:pointer;
+    transition: border-color .15s ease, background .15s ease;
+    position:relative;
+  }
+  .drop:hover, .drop.drag{ border-color:var(--red); background:var(--red-wash); }
+  .drop input{ position:absolute; inset:0; opacity:0; cursor:pointer; }
+  .drop .icon{ font-size:22px; margin-bottom:6px; display:block; }
+  .drop .main{ font-size:13.5px; font-weight:500; color:var(--ink); }
+  .drop .sub{ font-size:11.5px; color:var(--ink-faint); margin-top:3px; font-family:"IBM Plex Mono",monospace;}
+  .filename{
+    margin-top:10px; font-family:"IBM Plex Mono",monospace; font-size:12px;
+    background:#fff; border:1px solid var(--line-strong); padding:7px 10px;
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+  }
+  .filename .x{cursor:pointer; color:var(--red); font-weight:700;}
+
+  textarea, select{
+    width:100%; font-family:"IBM Plex Mono", monospace; font-size:12.5px;
+    background:#fff; border:1px solid var(--line-strong); color:var(--ink);
+    padding:10px 12px; resize:vertical;
+  }
+  textarea{ min-height:120px; line-height:1.6; }
+  textarea::placeholder{ color:#B4AC98; }
+  select{ appearance:none; -webkit-appearance:none; font-family:"Noto Sans KR",sans-serif; font-size:13.5px; padding:9px 12px; cursor:pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--ink-soft) 50%), linear-gradient(135deg, var(--ink-soft) 50%, transparent 50%);
+    background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+    background-size: 5px 5px, 5px 5px; background-repeat:no-repeat;
+  }
+  .hint{font-size:11px;color:var(--ink-faint); margin-top:6px; line-height:1.5;}
+
+  .radio-row{display:flex; gap:8px; flex-wrap:wrap;}
+  .radio-row label{
+    flex:1; min-width:140px; border:1px solid var(--line-strong); background:#fff;
+    padding:9px 10px; font-size:12.5px; cursor:pointer; text-align:center;
+    display:flex; flex-direction:column; gap:2px;
+  }
+  .radio-row label span.pct{font-family:"IBM Plex Mono",monospace; font-weight:600; color:var(--red-deep); font-size:13px;}
+  .radio-row input{position:absolute; opacity:0; pointer-events:none;}
+  .radio-row label:has(input:checked){ background:var(--red-wash); border-color:var(--red); }
+
+  .run-btn{
+    margin-top:26px; width:100%; padding:15px 18px;
+    background:var(--ink); color:var(--paper); border:none;
+    font-family:"Noto Serif KR", serif; font-weight:700; font-size:16px;
+    letter-spacing:.04em; cursor:pointer; position:relative; overflow:hidden;
+    transition: transform .1s ease, background .15s ease;
+  }
+  .run-btn:hover:not(:disabled){ background:var(--red-deep); }
+  .run-btn:active:not(:disabled){ transform:scale(.99); }
+  .run-btn:disabled{ background:#B9B1A0; cursor:not-allowed; }
+  .run-btn .sub{ display:block; font-family:"IBM Plex Mono",monospace; font-weight:400; font-size:10.5px; letter-spacing:.14em; opacity:.75; margin-top:3px; text-transform:uppercase;}
+
+  /* ===== Results panel ===== */
+  .results-head{
+    display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:10px;
+  }
+  .results-head h2{
+    font-family:"Noto Serif KR",serif; font-size:20px; margin:0; font-weight:700;
+  }
+  .summary-pills{ display:flex; gap:8px; font-family:"IBM Plex Mono",monospace; font-size:12px;}
+  .pill{ padding:5px 10px; border:1px solid var(--line-strong); background:#fff; }
+  .pill.issue{ color:var(--red-deep); border-color:var(--red); }
+  .pill.warn{ color:var(--gold); border-color:var(--gold); }
+  .pill.ok{ color:var(--blue); border-color:var(--blue); }
+
+  .empty-state{
+    border:1px dashed var(--line-strong); padding:60px 30px; text-align:center;
+    color:var(--ink-faint); font-size:13.5px; line-height:1.8;
+  }
+  .empty-state .glyph{ font-size:34px; display:block; margin-bottom:12px; opacity:.5;}
+
+  .card{
+    background:#fff; border:1px solid var(--line-strong); margin-bottom:10px;
+    display:flex; box-shadow: 0 1px 0 rgba(34,31,25,.04);
+    animation: rise .35s ease both;
+  }
+  @keyframes rise{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);} }
+  .card .tab{ width:7px; flex:none; }
+  .card.issue .tab{ background:var(--red); }
+  .card.warn .tab{ background:var(--gold); }
+  .card.ok .tab{ background:var(--blue); }
+  .card-body{ padding:14px 18px; flex:1; }
+  .card-top{ display:flex; align-items:center; gap:10px; margin-bottom:5px; flex-wrap:wrap;}
+  .badge{
+    font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:600;
+    letter-spacing:.06em; padding:2px 7px; text-transform:uppercase; border-radius:2px;
+  }
+  .card.issue .badge{ background:var(--red-soft); color:var(--red-deep); }
+  .card.warn .badge{ background:#F1E6C9; color:#7A5D14; }
+  .card.ok .badge{ background:var(--blue-soft); color:var(--blue); }
+  .card-title{ font-weight:700; font-size:14.5px; }
+  .card-detail{ font-size:13px; color:var(--ink-soft); line-height:1.7; }
+  .card-detail .mono{ font-family:"IBM Plex Mono",monospace; font-size:12px; background:var(--paper-deep); padding:1px 5px; border-radius:2px;}
+  .card-detail ul{ margin:6px 0 0; padding-left:18px; }
+  .card-detail li{ margin-bottom:3px; }
+
+  .section-divider{
+    display:flex; align-items:center; gap:10px; margin: 26px 0 12px;
+    font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.14em;
+    color:var(--ink-faint); text-transform:uppercase;
+  }
+  .section-divider::after{ content:""; flex:1; height:1px; background:var(--line-strong); }
+
+  /* stamp seal (appears after review) */
+  .seal-wrap{ display:flex; justify-content:flex-end; margin: 18px 0 4px; }
+  .seal{ width:118px; height:118px; opacity:0; transform:rotate(-14deg) scale(1.5); }
+  .seal.show{ animation: stampdown .5s cubic-bezier(.2,.9,.3,1.2) forwards; }
+  @keyframes stampdown{
+    0%{ opacity:0; transform:rotate(-14deg) scale(2.2); }
+    60%{ opacity:1; }
+    100%{ opacity:.92; transform:rotate(-9deg) scale(1); }
+  }
+
+  footer{ text-align:center; margin-top:50px; font-size:11.5px; color:var(--ink-faint); font-family:"IBM Plex Mono",monospace; letter-spacing:.04em;}
+
+  .loading-row{ display:flex; align-items:center; gap:10px; padding:16px 0; color:var(--ink-soft); font-size:13px; font-family:"IBM Plex Mono",monospace;}
+  .dot{ width:6px;height:6px;border-radius:50%; background:var(--red); animation:blink 1s infinite; }
+  .dot:nth-child(2){animation-delay:.15s;} .dot:nth-child(3){animation-delay:.3s;}
+  @keyframes blink{ 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="title-block">
+      <div class="eyebrow">교수·학습 및 평가운영계획서 · 자동 검토</div>
+      <h1>검토관</h1>
+      <p>hwpx 계획서 파일과 해당 교과·학년의 성취기준을 넣으면, 작성요령·반영비율·표기 형식을 기준으로 자동 점검합니다.</p>
+    </div>
+    <div class="stamp-static" aria-hidden="true">
+      <svg viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="46" fill="none" stroke="#B8341F" stroke-width="2.5"/>
+        <circle cx="50" cy="50" r="38" fill="none" stroke="#B8341F" stroke-width="1"/>
+        <text x="50" y="44" text-anchor="middle" font-family="Noto Serif KR" font-weight="900" font-size="20" fill="#B8341F">檢</text>
+        <text x="50" y="70" text-anchor="middle" font-family="Noto Serif KR" font-weight="900" font-size="20" fill="#B8341F">討</text>
+      </svg>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- LEFT: input sheet -->
+    <div class="sheet">
+      <div class="sheet-inner">
+
+        <div class="field-label"><span class="num">1</span>계획서 파일 (.hwpx)</div>
+        <div class="drop" id="dropZone">
+          <input type="file" id="fileInput" accept=".hwpx">
+          <span class="icon">⌂</span>
+          <div class="main">클릭하거나 파일을 끌어다 놓으세요</div>
+          <div class="sub">.HWPX ONLY</div>
+        </div>
+        <div class="filename" id="fileNameRow" style="display:none;">
+          <span id="fileNameText"></span>
+          <span class="x" id="clearFile">✕</span>
+        </div>
+
+        <div class="field-label"><span class="num">2</span>교과 유형</div>
+        <div class="radio-row">
+          <label><input type="radio" name="subjectType" value="30" checked><span>일반 교과</span><span class="pct">서술형 30%↑</span></label>
+          <label><input type="radio" name="subjectType" value="20"><span>체육·예술(음악/미술)</span><span class="pct">서술형 20%↑</span></label>
+        </div>
+
+        <div class="field-label"><span class="num">3</span>학년 / 적용 교육과정</div>
+        <select id="gradeSelect">
+          <option value="2022">1·2학년 — 2022 개정 교육과정</option>
+          <option value="2015">3학년 — 2015 개정 교육과정</option>
+        </select>
+        <div class="hint">3학년 선택 시 성취기준 코드 형식이 다를 수 있어, 코드 검증 결과를 참고용으로만 표시합니다.</div>
+
+        <div class="field-label"><span class="num">4</span>해당 교과 성취기준 파일 (.pdf)</div>
+        <div class="drop" id="stdDropZone">
+          <input type="file" id="stdFileInput" accept=".pdf">
+          <span class="icon">⌂</span>
+          <div class="main">클릭하거나 성취기준 PDF를 끌어다 놓으세요</div>
+          <div class="sub">.PDF ONLY</div>
+        </div>
+        <div class="filename" id="stdFileNameRow" style="display:none;">
+          <span id="stdFileNameText"></span>
+          <span class="x" id="clearStdFile">✕</span>
+        </div>
+        <div class="hint">국가 교육과정 성취기준 문서(예: 2022 개정 교육과정에 따른 성취수준 PDF)를 그대로 올리면 됩니다. 여기 없는 코드가 계획서에 등장하면 확인이 필요한 항목으로 표시됩니다. 비워두면 이 검사는 건너뜁니다.</div>
+
+        <button class="run-btn" id="runBtn" disabled>
+          검토 시작
+          <span class="sub">Run automated review</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- RIGHT: results -->
+    <div>
+      <div class="results-head">
+        <h2>검토 결과</h2>
+        <div class="summary-pills" id="summaryPills" style="display:none;">
+          <span class="pill issue" id="pillIssue">지적 0</span>
+          <span class="pill warn" id="pillWarn">확인필요 0</span>
+          <span class="pill ok" id="pillOk">적합 0</span>
+        </div>
+      </div>
+
+      <div id="resultsArea">
+        <div class="empty-state">
+          <span class="glyph">⎘</span>
+          왼쪽에 파일을 올리고 검토 시작을 누르면<br>여기에 항목별 결과가 표시됩니다.
+        </div>
+      </div>
+
+      <div class="seal-wrap"><svg id="seal" class="seal" viewBox="0 0 120 120">
+          <circle cx="60" cy="60" r="54" fill="none" stroke="#B8341F" stroke-width="3"/>
+          <circle cx="60" cy="60" r="45" fill="none" stroke="#B8341F" stroke-width="1.2"/>
+          <text x="60" y="52" text-anchor="middle" font-family="Noto Serif KR" font-weight="900" font-size="17" fill="#B8341F">검토필</text>
+          <text x="60" y="78" text-anchor="middle" font-family="IBM Plex Mono" font-size="9" fill="#B8341F" id="sealDate">2026</text>
+      </svg></div>
+    </div>
+  </div>
+
+  <footer>본 도구는 참고용 자동 점검입니다 · 최종 제출 전 반드시 담당 교사가 직접 확인하십시오</footer>
+</div>
+
+<script>
+(function(){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  const fileNameRow = document.getElementById('fileNameRow');
+  const fileNameText = document.getElementById('fileNameText');
+  const clearFile = document.getElementById('clearFile');
+  const runBtn = document.getElementById('runBtn');
+  const resultsArea = document.getElementById('resultsArea');
+  const summaryPills = document.getElementById('summaryPills');
+  const pillIssue = document.getElementById('pillIssue');
+  const pillWarn = document.getElementById('pillWarn');
+  const pillOk = document.getElementById('pillOk');
+  const seal = document.getElementById('seal');
+  const sealDate = document.getElementById('sealDate');
+
+  const stdDropZone = document.getElementById('stdDropZone');
+  const stdFileInput = document.getElementById('stdFileInput');
+  const stdFileNameRow = document.getElementById('stdFileNameRow');
+  const stdFileNameText = document.getElementById('stdFileNameText');
+  const clearStdFile = document.getElementById('clearStdFile');
+
+  let currentFile = null;
+  let currentStdFile = null;
+
+  function setFile(f){
+    if(!f) return;
+    if(!f.name.toLowerCase().endsWith('.hwpx')){
+      alert('.hwpx 파일만 업로드할 수 있습니다.');
+      return;
+    }
+    currentFile = f;
+    fileNameText.textContent = f.name;
+    fileNameRow.style.display = 'flex';
+    runBtn.disabled = false;
+  }
+
+  function setStdFile(f){
+    if(!f) return;
+    if(!f.name.toLowerCase().endsWith('.pdf')){
+      alert('.pdf 파일만 업로드할 수 있습니다.');
+      return;
+    }
+    currentStdFile = f;
+    stdFileNameText.textContent = f.name;
+    stdFileNameRow.style.display = 'flex';
+  }
+
+  dropZone.addEventListener('click', ()=> fileInput.click());
+  fileInput.addEventListener('change', e => setFile(e.target.files[0]));
+  ['dragenter','dragover'].forEach(ev=> dropZone.addEventListener(ev, e=>{ e.preventDefault(); dropZone.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev=> dropZone.addEventListener(ev, e=>{ e.preventDefault(); dropZone.classList.remove('drag'); }));
+  dropZone.addEventListener('drop', e=>{ if(e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
+  clearFile.addEventListener('click', e=>{
+    e.stopPropagation();
+    currentFile = null; fileInput.value='';
+    fileNameRow.style.display='none';
+    runBtn.disabled = true;
+  });
+
+  stdDropZone.addEventListener('click', ()=> stdFileInput.click());
+  stdFileInput.addEventListener('change', e => setStdFile(e.target.files[0]));
+  ['dragenter','dragover'].forEach(ev=> stdDropZone.addEventListener(ev, e=>{ e.preventDefault(); stdDropZone.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev=> stdDropZone.addEventListener(ev, e=>{ e.preventDefault(); stdDropZone.classList.remove('drag'); }));
+  stdDropZone.addEventListener('drop', e=>{ if(e.dataTransfer.files[0]) setStdFile(e.dataTransfer.files[0]); });
+  clearStdFile.addEventListener('click', e=>{
+    e.stopPropagation();
+    currentStdFile = null; stdFileInput.value='';
+    stdFileNameRow.style.display='none';
+  });
+
+  runBtn.addEventListener('click', runReview);
+
+  async function extractPdfText(file){
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let text = '';
+    for(let i=1; i<=pdf.numPages; i++){
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(it => it.str).join(' ') + '\n';
+    }
+    return text;
+  }
+
+  // ---------- HWPX PARSING ----------
+  async function parseHwpx(file){
+    const buf = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+    // find section files
+    const sectionNames = Object.keys(zip.files).filter(n => /^Contents\/section\d+\.xml$/.test(n)).sort();
+    if(sectionNames.length === 0) throw new Error('Contents/section*.xml을 찾을 수 없습니다. 올바른 hwpx 파일인지 확인해 주세요.');
+
+    let paragraphs = [];
+    let tables = [];
+    let fullTextParts = [];
+
+    for(const name of sectionNames){
+      const xmlText = await zip.file(name).async('string');
+      const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+      if(doc.getElementsByTagName('parsererror').length){
+        throw new Error(name + ' 을(를) XML로 해석할 수 없습니다.');
+      }
+      const root = doc.documentElement;
+
+      // top-level paragraphs (no nested table) = narrative prose
+      for(const child of Array.from(root.children)){
+        if(child.tagName !== 'hp:p') continue;
+        const hasTbl = child.getElementsByTagName('hp:tbl').length > 0;
+        const ts = child.getElementsByTagName('hp:t');
+        let txt = '';
+        for(const t of ts) txt += (t.textContent || '');
+        if(!hasTbl){
+          if(txt.trim()) paragraphs.push(txt);
+        }
+        fullTextParts.push(txt);
+      }
+
+      // all tables -> 2D arrays
+      const tbls = doc.getElementsByTagName('hp:tbl');
+      for(const tbl of tbls){
+        const trs = Array.from(tbl.children).filter(c=>c.tagName==='hp:tr');
+        const rows = [];
+        for(const tr of trs){
+          const tcs = Array.from(tr.children).filter(c=>c.tagName==='hp:tc');
+          const row = tcs.map(getCellText);
+          rows.push(row);
+        }
+        tables.push(rows);
+      }
+    }
+
+    const fullText = fullTextParts.join(' ');
+    return { paragraphs, tables, fullText };
+  }
+
+  function getCellText(tc){
+    const subLists = tc.getElementsByTagName('hp:subList');
+    if(subLists.length === 0) return '';
+    const subList = subLists[0];
+    const paras = subList.getElementsByTagName('hp:p');
+    let texts = [];
+    for(const p of paras){
+      const ts = p.getElementsByTagName('hp:t');
+      let ptxt = '';
+      for(const t of ts) ptxt += (t.textContent || '');
+      texts.push(ptxt);
+    }
+    return texts.join(' ').trim();
+  }
+
+  // ---------- RULES ----------
+  const LEFTOVER_MARKERS = [
+    '메모는 계획서 작성시 삭제',
+    '2025 중등 교수학습 및 평가계획 작성 도움자료',
+    '에듀넷',
+    '성취수준생성기',
+    '정기시험 1회 실시 시',
+    '정기시험을 논술형 만으로 가능',
+    '체육,음악,미술교과의 과목',
+    '[신설] 기본원칙이므로',
+    '지양해야 할 예시',
+    '배점 급간 최대 3점',
+    '기본 점수: 영역별 만점의',
+    '평가요소로 학습지 검사나 제출기한이 해당될 수 없음',
+    '성취기준: 예시처럼 일일이 나열',
+    '평가 시기 : 위 교수학습운영계획 표와 반드시 일치',
+    '학생 부담 고려한 시기 분산',
+    '과제형수행평가(암기식 수행평가 금지)',
+    '디지털 기반 수업(수업시수) 기재',
+    '학교평가 지표이므로 되도록 많이 부탁드립니다',
+    '평가계획 개요의 수행평가 시기와 일치',
+    '전 교과 공통 사항',
+    '필요하다면 줄 추가 후 작성',
+    '1학기 내용 일부 수정됨',
+    '생각의 힘을 나누는 학년',
+    '교과별로 기록(예:',
+    '<참고> 교과별 교육과정 및 성취수준',
+    '평가요소는 “~하기”로 표현할 것',
+    '평가요소는 "~하기"로 표현할 것',
+  ];
+
+  function ruleLeftoverMarkers(ctx){
+    const found = LEFTOVER_MARKERS.filter(m => ctx.fullText.includes(m));
+    if(found.length === 0){
+      return { status:'ok', title:'양식 안내문구 잔존 여부', detail:'작성요령·예시 등 삭제 대상 안내문구가 발견되지 않았습니다.' };
+    }
+    return {
+      status:'issue',
+      title:'양식 안내문구가 삭제되지 않고 남아 있음',
+      detail: `아래 ${found.length}개의 안내문구가 본문에 그대로 남아 있습니다. 문서 전체를 다시 살펴보며 삭제해야 합니다.<ul>` +
+        found.map(f=>`<li><span class="mono">${escapeHtml(f)}</span></li>`).join('') + '</ul>'
+    };
+  }
+
+  function extractCodes(text){
+    const re = /\[9[가-힣]\s*[0-9]{2}\s*-\s*[0-9]{2}\]/g;
+    const raw = text.match(re) || [];
+    const spaced = raw.filter(c => /\s/.test(c));
+    const normalized = raw.map(c => c.replace(/\s+/g,''));
+    return { set: new Set(normalized), spacedIssues: [...new Set(spaced)] };
+  }
+
+  function ruleCodes(ctx){
+    const used = extractCodes(ctx.fullText);
+    const items = [];
+
+    if(used.spacedIssues.length){
+      items.push({
+        status:'issue', title:'성취기준 코드 표기에 불필요한 공백',
+        detail: '코드 안에 공백이 포함되어 있습니다: ' + used.spacedIssues.map(c=>`<span class="mono">${escapeHtml(c)}</span>`).join(', ')
+      });
+    } else {
+      items.push({status:'ok', title:'성취기준 코드 표기 형식', detail:'코드 표기(대괄호+공백 없음)에 이상이 없습니다.'});
+    }
+
+    const stdText = ctx.stdInput.trim();
+    if(stdText){
+      const provided = extractCodes(stdText).set;
+      const missing = [...used.set].filter(c => !provided.has(c));
+      if(missing.length){
+        items.push({
+          status:'warn', title:'제공한 성취기준 목록에 없는 코드 사용',
+          detail: '계획서에 등장하지만 입력한 성취기준 목록에는 없는 코드입니다. 오타이거나 다른 학년/교육과정 코드일 수 있습니다.<br>' +
+            missing.map(c=>`<span class="mono">${escapeHtml(c)}</span>`).join(', ')
+        });
+      } else {
+        items.push({status:'ok', title:'성취기준 코드 일치 여부', detail:`계획서에 사용된 코드 ${used.set.size}개가 모두 입력한 성취기준 목록 안에 있습니다.`});
+      }
+    } else {
+      items.push({status:'warn', title:'성취기준 코드 대조 생략됨', detail:`성취기준 PDF를 올리지 않아 대조를 건너뛰었습니다. 계획서에서 발견된 코드는 ${used.set.size}개입니다.`});
+    }
+    return items;
+  }
+
+  function findPerformanceTables(tables){
+    return tables.filter(rows => rows.length && rows[0][0] && rows[0][0].trim() === '평가 영역명');
+  }
+
+  function ruleAreaNames(ctx){
+    const perfTables = findPerformanceTables(ctx.tables);
+    if(perfTables.length === 0){
+      return [{status:'warn', title:'수행평가 영역명 확인 불가', detail:"'평가 영역명' 행을 가진 표를 찾지 못했습니다. 표 구조가 양식과 다를 수 있습니다."}];
+    }
+    const items = [];
+    const bad = [];
+    const good = [];
+    for(const rows of perfTables){
+      const name = (rows[0][1]||'').trim();
+      if(!name) continue;
+      if(/기$/.test(name)) good.push(name);
+      else bad.push(name);
+    }
+    if(bad.length){
+      items.push({
+        status:'issue', title:"수행평가 영역명이 '활동명+~기' 형식으로 끝나지 않음",
+        detail: bad.map(n=>`<span class="mono">${escapeHtml(n)}</span>`).join(', ') + ' — "~기"로 끝나도록 수정을 검토하세요. (예: 그리기, 만들기, 작성하기, 표현하기 등)' +
+          (good.length ? `<br>적합: ${good.map(n=>`<span class="mono">${escapeHtml(n)}</span>`).join(', ')}` : '')
+      });
+    } else {
+      items.push({status:'ok', title:"수행평가 영역명 '활동명+~기' 형식", detail: `모든 영역명(${good.length}개)이 "~기"로 끝납니다: ` + good.map(n=>`<span class="mono">${escapeHtml(n)}</span>`).join(', ')});
+    }
+    return items;
+  }
+
+  function ruleElementsVsStandards(ctx){
+    const perfTables = findPerformanceTables(ctx.tables);
+    if(perfTables.length === 0) return [];
+    const items = [];
+    for(const rows of perfTables){
+      const name = (rows[0][1]||'').trim() || '(이름 미확인)';
+      const allText = rows.map(r=>r.join(' | ')).join(' \n ');
+      const codeSet = extractCodes(allText).set;
+      // count 평가요소 rows: col0 matches pattern ending with (숫자점)
+      let elementCount = 0;
+      const elementNames = [];
+      for(const r of rows){
+        const c0 = (r[0]||'').trim();
+        if(/\(\s*\d+\s*점\s*\)\s*$/.test(c0)){
+          elementCount++;
+          elementNames.push(c0);
+        }
+      }
+      if(codeSet.size === 0 || elementCount === 0){
+        items.push({status:'warn', title:`[${name}] 평가요소/성취기준 수 확인 불가`, detail:'표 형식을 인식하지 못했습니다.'});
+        continue;
+      }
+      if(elementCount < codeSet.size){
+        items.push({
+          status:'issue', title:`[${name}] 평가요소 수가 성취기준 수보다 적음`,
+          detail:`성취기준 ${codeSet.size}개 / 평가요소 ${elementCount}개. "평가요소 수는 성취기준 수보다 많거나 같아야 함" 원칙에 어긋납니다.`
+        });
+      } else {
+        items.push({status:'ok', title:`[${name}] 평가요소 수 ≥ 성취기준 수`, detail:`성취기준 ${codeSet.size}개 / 평가요소 ${elementCount}개로 기준을 충족합니다.`});
+      }
+    }
+    return items;
+  }
+
+  function parsePoint(str){
+    if(!str) return null;
+    const m = String(str).replace(/\s/g,'').match(/-?\d+(\.\d+)?/);
+    return m ? parseFloat(m[0]) : null;
+  }
+
+  function ruleBaseScore(ctx){
+    const perfTables = findPerformanceTables(ctx.tables);
+    if(perfTables.length === 0) return [];
+    const items = [];
+    for(const rows of perfTables){
+      const name = (rows[0][1]||'').trim() || '(이름 미확인)';
+      // area max score: header row, find '영역만점' then next cell
+      let areaMax = null;
+      const header = rows[0];
+      const idx = header.findIndex(c => (c||'').includes('영역만점'));
+      if(idx >= 0 && header[idx+1]) areaMax = parsePoint(header[idx+1]);
+
+      let baseScore = null, notSubmitted = null, absent = null;
+      for(const r of rows){
+        const c0 = (r[0]||'');
+        if(c0.includes('기본점수')) baseScore = parsePoint(r[r.length-1]);
+        else if(c0.includes('미제출')) notSubmitted = parsePoint(r[r.length-1]);
+        else if(c0.trim().includes('장기') && c0.includes('결석')) absent = parsePoint(r[r.length-1]);
+      }
+      if(areaMax===null || baseScore===null){
+        items.push({status:'warn', title:`[${name}] 기본점수 확인 불가`, detail:'영역만점 또는 기본점수 값을 찾지 못했습니다.'});
+        continue;
+      }
+      const ratio = baseScore / areaMax;
+      const ratioOk = ratio >= 0.2 - 1e-9 && ratio <= 0.4 + 1e-9;
+      const subOk = notSubmitted===null ? null : (notSubmitted === baseScore - 1);
+      const absOk = absent===null ? null : (absent === baseScore - 2);
+
+      const problems = [];
+      if(!ratioOk) problems.push(`기본점수 비율 ${(ratio*100).toFixed(0)}% (권장 20~40% 벗어남)`);
+      if(subOk === false) problems.push(`미제출 점수(${notSubmitted})가 기본점수-1(${baseScore-1})과 다름`);
+      if(absOk === false) problems.push(`장기결석 점수(${absent})가 기본점수-2(${baseScore-2})와 다름`);
+
+      if(problems.length){
+        items.push({status:'issue', title:`[${name}] 기본점수/감점 기준 확인 필요`, detail: problems.join('<br>')});
+      } else {
+        items.push({status:'ok', title:`[${name}] 기본점수·감점 기준`, detail:`기본점수 ${baseScore}/${areaMax}점(${(ratio*100).toFixed(0)}%), 미제출·장기결석 감점 공식 모두 기준에 부합합니다.`});
+      }
+    }
+    return items;
+  }
+
+  function sumPercentsInRow(row){
+    let total = 0, any = false;
+    for(const cell of row){
+      const m = (cell||'').match(/(\d+(\.\d+)?)\s*%/g);
+      if(m){ any = true; total += m.reduce((s,x)=> s + parseFloat(x), 0); }
+    }
+    return any ? total : null;
+  }
+
+  function ruleEssayRatio(ctx){
+    const threshold = ctx.threshold;
+    let declaredTotal = null;
+    for(const rows of ctx.tables){
+      for(const row of rows){
+        const c0 = (row[0]||'');
+        if(c0.includes('논술형') && c0.includes('반영비율')){
+          const last = row[row.length-1];
+          const m = (last||'').match(/(\d+(\.\d+)?)\s*%/);
+          if(m) declaredTotal = parseFloat(m[1]);
+          if(declaredTotal === null){
+            declaredTotal = sumPercentsInRow(row.slice(1));
+          }
+        }
+      }
+    }
+    if(declaredTotal === null){
+      return {status:'warn', title:'서술형(논술형) 평가 비율 확인 불가', detail:"'논술형 평가 반영비율' 행을 찾지 못했습니다."};
+    }
+    if(declaredTotal + 1e-9 < threshold){
+      return {status:'issue', title:'서술형(논술형) 평가 비율 미달', detail:`현재 ${declaredTotal}% — 선택한 교과 유형 기준(${threshold}% 이상)에 미달합니다.`};
+    }
+    return {status:'ok', title:'서술형(논술형) 평가 비율', detail:`${declaredTotal}%로 편성되어 기준(${threshold}% 이상)을 충족합니다.`};
+  }
+
+  function ruleRatio100(ctx){
+    for(const rows of ctx.tables){
+      for(const row of rows){
+        if((row[0]||'').trim() === '반영비율'){
+          const total = sumPercentsInRow(row.slice(1));
+          if(total === null) continue;
+          if(Math.abs(total - 100) > 0.5){
+            return {status:'issue', title:'정기시험+수행평가 반영비율 합계 오류', detail:`합계가 ${total}%로 100%가 아닙니다.`};
+          }
+          return {status:'ok', title:'정기시험+수행평가 반영비율 합계', detail:'합계 100%로 정확합니다.'};
+        }
+      }
+    }
+    return {status:'warn', title:'반영비율 합계 확인 불가', detail:"'반영비율' 행을 찾지 못했습니다."};
+  }
+
+  function ruleDigitalHours(ctx){
+    // sum every "디지털 기반 수업(N)" occurrence in the body
+    const re = /디지털\s*기반\s*수업\s*\(\s*(\d+)\s*\)/g;
+    let total = 0, count = 0, m;
+    while((m = re.exec(ctx.fullText))){ total += parseInt(m[1], 10); count++; }
+
+    // find the declared total, e.g. "26/62" or "15/34" next to the summary label
+    let stated = null;
+    for(const rows of ctx.tables){
+      for(const row of rows){
+        if((row[0]||'').includes('디지털 기반 수업 시수')){
+          for(let i=1;i<row.length;i++){
+            const fm = (row[i]||'').match(/(\d+)\s*\/\s*(\d+)/g);
+            if(fm && fm.length){
+              const last = fm[fm.length-1].match(/(\d+)\s*\/\s*(\d+)/);
+              stated = parseInt(last[1], 10);
+            }
+          }
+        }
+      }
+    }
+
+    if(count === 0){
+      return {status:'warn', title:'디지털 기반 수업 시수 확인 불가', detail:'"★디지털 기반 수업(N)" 표기를 찾지 못했습니다.'};
+    }
+    if(stated === null){
+      return {status:'warn', title:'디지털 기반 수업 시수 합계 확인 불가', detail:`"디지털 기반 수업(N)" 표기 ${count}건의 합은 ${total}시간이지만, 표에서 "2학기 디지털 기반 수업 시수" 값을 찾지 못해 대조하지 못했습니다.`};
+    }
+
+    const caveat = ctx.hasLeftover
+      ? '<br><span class="mono">주의</span>: 양식 안내문구가 삭제되지 않은 곳이 있어, 안내문 속 예시("예) 해당 주에 2시간 했을 경우-&gt; ★디지털 기반 수업(2)" 등)가 실제 표기와 함께 집계되어 합계가 실제보다 크게 나올 수 있습니다. 안내문구를 삭제한 뒤 다시 확인하세요.'
+      : '';
+
+    if(total !== stated){
+      return {
+        status:'issue', title:'디지털 기반 수업 시수 합계 불일치',
+        detail:`"★디지털 기반 수업(N)" 표기 ${count}건의 합은 ${total}시간이지만, "2학기 디지털 기반 수업 시수"에는 ${stated}(으)로 적혀 있습니다.${caveat}`
+      };
+    }
+    return {status:'ok', title:'디지털 기반 수업 시수 합계', detail:`"★디지털 기반 수업(N)" 표기 ${count}건의 합(${total}시간)이 "2학기 디지털 기반 수업 시수"(${stated})와 일치합니다.${caveat}`};
+  }
+
+  function ruleSection8(ctx){
+    const idx = ctx.paragraphs.findIndex(p => p.includes('수행평가 유의사항'));
+    if(idx === -1) return {status:'warn', title:"'8. 수행평가 유의사항' 항목 확인 불가", detail:'해당 항목을 찾지 못했습니다.'};
+    const next = ctx.paragraphs[idx+1] || '';
+    if(/^가\.\s*$/.test(next.trim())){
+      return {status:'issue', title:"'8. 수행평가 유의사항' 가. 항목이 비어 있음",
+        detail:'양식 안내에 따르면 이 항목은 "모든 수행평가는 수업시간 중 실시를 원칙으로 하며, 과제형 수행평가는 실시하지 않는다." 문구가 있어야 하며 삭제 금지 항목입니다.'};
+    }
+    return {status:'ok', title:"'8. 수행평가 유의사항' 가. 항목", detail:'내용이 채워져 있습니다.'};
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ---------- RUN ----------
+  async function runReview(){
+    runBtn.disabled = true;
+    resultsArea.innerHTML = `<div class="loading-row"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;계획서를 읽는 중입니다…</div>`;
+    summaryPills.style.display = 'none';
+    seal.classList.remove('show');
+
+    try{
+      const { paragraphs, tables, fullText } = await parseHwpx(currentFile);
+
+      let stdInput = '';
+      if(currentStdFile){
+        resultsArea.innerHTML = `<div class="loading-row"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;성취기준 PDF를 읽는 중입니다…</div>`;
+        try{
+          stdInput = await extractPdfText(currentStdFile);
+        } catch(pdfErr){
+          resultsArea.innerHTML = `<div class="card issue"><div class="tab"></div><div class="card-body">
+            <div class="card-top"><span class="badge">오류</span><span class="card-title">성취기준 PDF를 읽지 못했습니다</span></div>
+            <div class="card-detail">${escapeHtml(pdfErr.message || String(pdfErr))}<br>PDF가 스캔본(이미지)이거나 손상되었을 수 있습니다. 성취기준 대조 없이 계속하려면 PDF를 제거한 뒤 다시 시도하세요.</div>
+          </div></div>`;
+          runBtn.disabled = false;
+          return;
+        }
+      }
+
+      const threshold = parseInt(document.querySelector('input[name="subjectType"]:checked').value, 10);
+      const ctx = { paragraphs, tables, fullText, threshold, stdInput, hasLeftover:false };
+
+      const leftoverResult = ruleLeftoverMarkers(ctx);
+      ctx.hasLeftover = leftoverResult.status === 'issue';
+
+      const results = [];
+      results.push(leftoverResult);
+      results.push(...ruleCodes(ctx));
+      results.push(...ruleAreaNames(ctx));
+      results.push(...ruleElementsVsStandards(ctx));
+      results.push(ruleEssayRatio(ctx));
+      results.push(ruleRatio100(ctx));
+      results.push(...ruleBaseScore(ctx));
+      results.push(ruleDigitalHours(ctx));
+      results.push(ruleSection8(ctx));
+
+      renderResults(results);
+    } catch(err){
+      resultsArea.innerHTML = `<div class="card issue"><div class="tab"></div><div class="card-body">
+        <div class="card-top"><span class="badge">오류</span><span class="card-title">파일을 읽지 못했습니다</span></div>
+        <div class="card-detail">${escapeHtml(err.message || String(err))}<br>hwpx 파일 형식이 손상되었거나, 예상한 표 구조와 다를 수 있습니다.</div>
+      </div></div>`;
+    } finally {
+      runBtn.disabled = false;
+    }
+  }
+
+  function renderResults(results){
+    const order = {issue:0, warn:1, ok:2};
+    results.sort((a,b)=> order[a.status]-order[b.status]);
+
+    const counts = {issue:0, warn:0, ok:0};
+    results.forEach(r=> counts[r.status]++);
+    pillIssue.textContent = `지적 ${counts.issue}`;
+    pillWarn.textContent = `확인필요 ${counts.warn}`;
+    pillOk.textContent = `적합 ${counts.ok}`;
+    summaryPills.style.display = 'flex';
+
+    const badgeLabel = {issue:'지적사항', warn:'확인필요', ok:'적합'};
+    resultsArea.innerHTML = results.map(r => `
+      <div class="card ${r.status}">
+        <div class="tab"></div>
+        <div class="card-body">
+          <div class="card-top"><span class="badge">${badgeLabel[r.status]}</span><span class="card-title">${escapeHtml(r.title)}</span></div>
+          <div class="card-detail">${r.detail}</div>
+        </div>
+      </div>
+    `).join('');
+
+    const now = new Date();
+    sealDate.textContent = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,'0')}.${String(now.getDate()).padStart(2,'0')}`;
+    requestAnimationFrame(()=> seal.classList.add('show'));
+  }
+})();
+</script>
+</body>
+</html>
