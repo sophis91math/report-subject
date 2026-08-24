@@ -503,10 +503,15 @@
     if(maxRow === 0 || maxCol === 0) return [];
     const grid = Array.from({ length: maxRow }, () => Array(maxCol).fill(''));
     for(const cd of cellData){
+      // Replicate DOWN across every row a rowSpan covers (a "월" cell spanning
+      // 4 weeks needs its value on all 4 physical rows for per-row logic to
+      // work) — but do NOT replicate ACROSS a colSpan. Two independent cells
+      // that just happen to hold the same text (e.g. 정기시험=50% sitting next
+      // to 수행평가=50%) must stay distinguishable, so only the cell's own
+      // origin column gets the text; the rest of its colSpan is left blank
+      // and simply skipped by callers that filter out empty cells.
       for(let r = cd.rowAddr; r < cd.rowAddr + cd.rowSpan && r < maxRow; r++){
-        for(let c = cd.colAddr; c < cd.colAddr + cd.colSpan && c < maxCol; c++){
-          grid[r][c] = cd.text;
-        }
+        if(cd.colAddr < maxCol) grid[r][cd.colAddr] = cd.text;
       }
     }
     return grid;
@@ -697,16 +702,17 @@
     return tables.filter(rows => rows.length && rows[0][0] && noSpace(rows[0][0]) === '평가영역명');
   }
 
-  // Collapse consecutive duplicate cells produced by a colSpan merge (e.g. a
-  // "70%" cell spanning 4 sub-columns now appears 4 times in a row after grid
-  // extraction) back down to one, so summing a row's values doesn't
-  // accidentally count a single merged figure multiple times.
+  // A colSpan-merged cell (e.g. a "정기시험 50%" cell spanning the 1차/2차
+  // sub-columns) now only has its text at its own origin column — the rest of
+  // the columns it visually covers are blank in the grid. This turns a sparse
+  // row back into a compact, ordered list of its real (non-blank) values, so
+  // positional lookups ("the name is right after the label", "the value right
+  // after this row's total") work without tripping over the gaps. Unlike a
+  // naive de-duplication, this never merges two cells that just coincidentally
+  // hold the same text (e.g. 정기시험=50% next to 수행평가=50%) — only true
+  // colSpan gaps are blank, so nothing legitimate gets collapsed away.
   function collapseRow(row){
-    const out = [];
-    for(const cell of row){
-      if(out.length === 0 || out[out.length-1] !== cell) out.push(cell);
-    }
-    return out;
+    return row.filter(cell => cell !== '' && cell != null);
   }
 
   // The "평가 영역명" label cell itself is sometimes colSpan-merged across 2
@@ -919,17 +925,23 @@
     return m ? parseFloat(m[0]) : null;
   }
 
+  // The "영역 만점" label is sometimes colSpan-merged too, so find it in the
+  // de-duplicated header row and read the value right after that.
+  function getAreaMaxScore(rows){
+    const collapsed = collapseRow(rows[0] || []);
+    const idx = collapsed.findIndex(c => noSpace(c||'').includes('영역만점'));
+    if(idx >= 0 && collapsed[idx+1]) return parsePoint(collapsed[idx+1]);
+    return null;
+  }
+
   function ruleBaseScore(ctx){
     const perfTables = findPerformanceTables(ctx.tables);
     if(perfTables.length === 0) return [];
     const items = [];
     for(const rows of perfTables){
       const name = getAreaName(rows) || '(이름 미확인)';
-      // area max score: header row, find '영역만점' then next cell
-      let areaMax = null;
-      const header = rows[0];
-      const idx = header.findIndex(c => noSpace(c||'').includes('영역만점'));
-      if(idx >= 0 && header[idx+1]) areaMax = parsePoint(header[idx+1]);
+      // area max score: header row, find '영역만점' then next cell (colSpan-safe)
+      const areaMax = getAreaMaxScore(rows);
 
       let baseScore = null, notSubmitted = null, absent = null;
       for(const r of rows){
@@ -1067,13 +1079,9 @@
     let sumAreaMax = 0;
     const areaMaxList = [];
     for(const rows of perfTables){
-      const header = rows[0];
-      const idx = header.findIndex(c => noSpace(c||'').includes('영역만점'));
-      const name = (header[1]||'').trim() || '(이름 미확인)';
-      if(idx >= 0 && header[idx+1]){
-        const val = parsePoint(header[idx+1]);
-        if(val !== null){ sumAreaMax += val; areaMaxList.push(`${name} ${val}점`); }
-      }
+      const name = getAreaName(rows) || '(이름 미확인)';
+      const val = getAreaMaxScore(rows);
+      if(val !== null){ sumAreaMax += val; areaMaxList.push(`${name} ${val}점`); }
     }
     const perfPercent = getPerformancePercentFromRatioRow(ctx);
 
