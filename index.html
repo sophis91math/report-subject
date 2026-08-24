@@ -651,7 +651,8 @@
       status:'issue',
       title:'양식 안내문구가 삭제되지 않고 남아 있음',
       detail: `아래 ${found.length}개의 안내문구가 본문에 그대로 남아 있습니다. 문서 전체를 다시 살펴보며 삭제해야 합니다.<ul>` +
-        found.map(f=>`<li><span class="mono">${escapeHtml(f)}</span></li>`).join('') + '</ul>'
+        found.map(f=>`<li><span class="mono">${escapeHtml(f)}</span></li>`).join('') + '</ul>' +
+        `<div style="margin-top:8px;"><strong>조치사항:</strong> 검토파일의 메모 삭제 요망</div>`
     };
   }
 
@@ -921,8 +922,13 @@
 
   function parsePoint(str){
     if(!str) return null;
-    const m = String(str).replace(/\s/g,'').match(/-?\d+(\.\d+)?/);
-    return m ? parseFloat(m[0]) : null;
+    // Undeleted guide-text notes (e.g. "*배점 급간 최대 3점...") sometimes end
+    // up merged into the same cell as the real answer, which is always
+    // appended at the very end — so take the LAST number in the cell, not
+    // the first, or a leftover note's number gets mistaken for the answer.
+    const matches = String(str).replace(/\s/g,'').match(/-?\d+(\.\d+)?/g);
+    if(!matches || matches.length === 0) return null;
+    return parseFloat(matches[matches.length - 1]);
   }
 
   // The "영역 만점" label is sometimes colSpan-merged too, so find it in the
