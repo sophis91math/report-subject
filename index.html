@@ -465,7 +465,13 @@
     for(const t of ts){
       let p = t.parentElement, inMemo = false;
       while(p && p !== root){
-        if(p.tagName === 'hp:memo'){ inMemo = true; break; }
+        // Native HWPX comments ("메모") are stored as a <hp:fieldBegin
+        // type="MEMO"> control with its own nested <hp:subList> of paragraphs,
+        // not as a plain <hp:memo> element — so both tags need to be checked,
+        // or a reviewer's comment text leaks into the extracted document text.
+        if(p.tagName === 'hp:memo' || (p.tagName === 'hp:fieldBegin' && p.getAttribute('type') === 'MEMO')){
+          inMemo = true; break;
+        }
         p = p.parentElement;
       }
       if(!inMemo) txt += (t.textContent || '');
@@ -601,10 +607,18 @@
   }
 
   function getCellText(tc){
-    const subLists = tc.getElementsByTagName('hp:subList');
-    if(subLists.length === 0) return '';
-    const subList = subLists[0];
-    const paras = subList.getElementsByTagName('hp:p');
+    // Only the DIRECT child <hp:subList> and its DIRECT child <hp:p> paragraphs
+    // are this cell's own content. Using getElementsByTagName (recursive) here
+    // would also pick up the nested <hp:subList>/<hp:p> that live inside a
+    // native HWPX comment (<hp:fieldBegin type="MEMO">) attached to a run in
+    // this cell — and since each of those gets collectText() called on it
+    // individually, the comment-exclusion check can't see past that inner
+    // paragraph to notice it's inside a fieldBegin, so the comment text would
+    // leak into the cell's value. Direct-children-only avoids visiting those
+    // nested paragraphs as if they were top-level cell content at all.
+    const subList = Array.from(tc.children).find(c => c.tagName === 'hp:subList');
+    if(!subList) return '';
+    const paras = Array.from(subList.children).filter(c => c.tagName === 'hp:p');
     let texts = [];
     for(const p of paras){
       texts.push(collectText(p));
